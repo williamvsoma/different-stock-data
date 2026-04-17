@@ -4,6 +4,18 @@
 all:
 	uv run python main.py
 
+## Download raw data and save interim parquet files to data/interim/
+data:
+	uv run python main.py --stage data
+
+## Build features from interim data and save to data/processed/
+features:
+	uv run python main.py --stage features
+
+## Run walk-forward backtest, evaluate, and save model outputs to models/
+train:
+	uv run python main.py --stage train
+
 ## Install / sync dependencies
 install:
 	uv sync
