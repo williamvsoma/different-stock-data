@@ -101,6 +101,53 @@ def safe_spearmanr(a, b):
     return r if np.isfinite(r) else np.nan
 
 
+
+def multi_source_fi(xgb_m, ridge_m, rf_m, feature_cols, ridge_cols=None):
+    """Aggregate feature importance from all ensemble models.
+
+    Returns a DataFrame with columns: xgb_gain, ridge_coef, rf_impurity, combined.
+    ``ridge_cols`` are the feature names used by Ridge (may differ from tree cols).
+    """
+    import pandas as pd
+
+    fi = pd.DataFrame(index=feature_cols)
+
+    # XGBoost gain-based importance
+    if hasattr(xgb_m, "feature_importances_"):
+        xgb_fi = xgb_m.feature_importances_
+        xgb_idx = getattr(xgb_m, "feature_names_in_", feature_cols[:len(xgb_fi)])
+        fi["xgb_gain"] = pd.Series(xgb_fi, index=xgb_idx).reindex(feature_cols, fill_value=0.0)
+    else:
+        fi["xgb_gain"] = 0.0
+
+    # Ridge absolute coefficients (normalised)
+    if hasattr(ridge_m, "coef_"):
+        r_cols = ridge_cols if ridge_cols is not None else feature_cols[:len(ridge_m.coef_)]
+        abs_coef = np.abs(ridge_m.coef_)
+        total = abs_coef.sum()
+        norm_coef = abs_coef / total if total > 0 else abs_coef
+        fi["ridge_coef"] = pd.Series(norm_coef, index=r_cols).reindex(feature_cols, fill_value=0.0)
+    else:
+        fi["ridge_coef"] = 0.0
+
+    # RF impurity-based importance
+    if hasattr(rf_m, "feature_importances_"):
+        rf_fi = rf_m.feature_importances_
+        rf_idx = getattr(rf_m, "feature_names_in_", feature_cols[:len(rf_fi)])
+        fi["rf_impurity"] = pd.Series(rf_fi, index=rf_idx).reindex(feature_cols, fill_value=0.0)
+    else:
+        fi["rf_impurity"] = 0.0
+
+    # Combined: equal-weight average of normalised importances
+    for col in ["xgb_gain", "ridge_coef", "rf_impurity"]:
+        s = fi[col].sum()
+        if s > 0:
+            fi[col] = fi[col] / s
+    fi["combined"] = fi[["xgb_gain", "ridge_coef", "rf_impurity"]].mean(axis=1)
+
+    return fi
+
+
 def bootstrap_ci(vals, n_boot=10_000, seed=42):
     """Bootstrap confidence interval for the mean.
 

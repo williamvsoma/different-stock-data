@@ -57,7 +57,7 @@ def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
     print(f"    Ret Ridge:       {prod_df['ret_rc_ridge'].mean():.3f}")
     print(f"    Ret RF:          {prod_df['ret_rc_rf'].mean():.3f}")
 
-    # Feature importance stability
+    # Feature importance stability (combined multi-source)
     print(f"\n{'='*80}")
     print("FEATURE IMPORTANCE STABILITY (top 15 by average)")
     print(f"{'='*80}\n")
@@ -69,6 +69,19 @@ def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
     for f in top15.index:
         m, s = fi_wide.loc[f].mean(), fi_wide.loc[f].std()
         print(f"  {f:38s} {m:.4f}  {s:.4f}  {m / (s + 1e-10):.2f}")
+
+    # Multi-source FI breakdown (if available)
+    if prod_fi and "fi_detail" in prod_fi[0]:
+        print(f"\n{'='*80}")
+        print("MULTI-SOURCE FEATURE IMPORTANCE (last quarter)")
+        print(f"{'='*80}\n")
+        last_detail = prod_fi[-1]["fi_detail"]
+        top15_detail = last_detail.sort_values("combined", ascending=False).head(15)
+        print(f"  {'Feature':38s} {'XGB':>7s} {'Ridge':>7s} {'RF':>7s} {'Comb':>7s}")
+        print(f"  {'-'*70}")
+        for feat_name, row in top15_detail.iterrows():
+            print(f"  {feat_name:38s} {row['xgb_gain']:.4f}  {row['ridge_coef']:.4f}  "
+                  f"{row['rf_impurity']:.4f}  {row['combined']:.4f}")
 
 
 # ── Factor benchmarks + bootstrap ─────────────────────────────────────────────

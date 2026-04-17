@@ -19,6 +19,7 @@ from stock_data.config import (
 )
 from stock_data.modeling.predict import (
     ledoit_wolf_cov,
+    multi_source_fi,
     mv_optimize,
     mv_optimize_diag,
     portfolio_turnover,
@@ -132,11 +133,11 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
             cfg["shrinkage_alpha"],
         )
 
-        fi_full = pd.Series(0.0, index=feature_cols_all)
-        fi_full[sel_cols] = xgb_m.feature_importances_
+        fi_df = multi_source_fi(xgb_m, ridge_m, rf_m, feature_cols_all, sel_cols)
         fi_list.append({
             "date": td,
-            "fi": fi_full,
+            "fi": fi_df["combined"],
+            "fi_detail": fi_df,
         })
 
         # ── Volatility model ──
