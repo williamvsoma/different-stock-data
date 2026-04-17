@@ -421,8 +421,8 @@ def run_iteration_analysis(
                 if tr_m.sum() < 50:
                     continue
                 sc = StandardScaler()
-                X_tr_n = sc.fit_transform(X_p.loc[tr_m, stable_feat].fillna(0))
-                X_te_n = sc.transform(X_p.loc[te_m, stable_feat].fillna(0))
+                X_tr_n = sc.fit_transform(X_p.loc[tr_m, stable_feat].fillna(0).values)
+                X_te_n = sc.transform(X_p.loc[te_m, stable_feat].fillna(0).values)
                 xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
                 xgb_m.fit(X_tr_n, y_ret_p[tr_m], verbose=0)
                 rdg_m = Ridge(**RIDGE_PARAMS)
