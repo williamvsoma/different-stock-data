@@ -5,7 +5,6 @@ description = "ML-enhanced S&P 500 quarterly stock selection strategy"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "aiohttp>=3.13.5",
     "matplotlib>=3.10.8",
     "numpy>=2.4.4",
     "pandas>=3.0.2",
@@ -25,4 +24,5 @@ dev = [
     "mkdocs-material>=9.7.6",
     "mkdocstrings>=1.0.4",
     "mkdocstrings-python>=2.0.3",
+    "pytest>=8.0",
 ]

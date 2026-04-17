@@ -237,7 +237,7 @@ def assess_external_validity(
         w, syms = wdata["weights"], wdata["symbols"]
         te_m = dp == td
         Xte_attr = X_p[te_m]
-        act_ret_attr = risk_model_df.loc[Xte_attr.index, "next_q_return"].values
+        act_ret_attr = risk_model_df["next_q_return"].loc[Xte_attr.index].values
         sym_idx = {s: i for i, s in enumerate(Xte_attr.index.get_level_values("symbol"))}
         mkt_r = act_ret_attr.mean()
         contrib = []
@@ -421,11 +421,11 @@ def run_iteration_analysis(
                 if tr_m.sum() < 50:
                     continue
                 sc = StandardScaler()
-                X_tr_n = sc.fit_transform(X_p.loc[tr_m, stable_feat].fillna(0))
-                X_te_n = sc.transform(X_p.loc[te_m, stable_feat].fillna(0))
+                X_tr_n = sc.fit_transform(X_p.loc[tr_m, stable_feat].fillna(0).values)
+                X_te_n = sc.transform(X_p.loc[te_m, stable_feat].fillna(0).values)
                 xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
                 xgb_m.fit(X_tr_n, y_ret_p[tr_m], verbose=0)
-                rdg_m = Ridge(**RIDGE_PARAMS)
+                rdg_m = Ridge(**RIDGE_PARAMS)  # type: ignore[arg-type]
                 rdg_m.fit(X_tr_n, y_ret_p[tr_m])
                 rf_m = RandomForestRegressor(**RF_PARAMS)
                 rf_m.fit(X_tr_n, y_ret_p[tr_m])
@@ -497,7 +497,7 @@ def run_iteration_analysis(
         td = row["test_date"]
         te_m = dp == td
         Xte_v = X_p.loc[te_m]
-        act_vol = risk_model_df.loc[Xte_v.index, "realized_vol"].values
+        act_vol = risk_model_df["realized_vol"].loc[Xte_v.index].values
         if "hist_vol_3m" in Xte_v.columns:
             naive_pred = Xte_v["hist_vol_3m"].values
             valid = ~np.isnan(naive_pred) & ~np.isnan(act_vol)

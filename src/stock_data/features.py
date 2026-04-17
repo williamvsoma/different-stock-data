@@ -115,7 +115,7 @@ def balance_sheet_features(features_raw, bs_raw) -> pd.DataFrame:
     return feat
 
 
-def cashflow_features(features_raw, cf_raw) -> pd.DataFrame:
+def cashflow_features(features_raw, cf_raw, bs_raw=None) -> pd.DataFrame:
     feat = pd.DataFrame(index=features_raw.index)
     cf = cf_raw.reindex(features_raw.index)
 
@@ -123,14 +123,16 @@ def cashflow_features(features_raw, cf_raw) -> pd.DataFrame:
     ni = gcol(features_raw, "Net Income", 0)
     ebitda = gcol(features_raw, "EBITDA", 0)
     rev_safe = rev.replace(0, np.nan)
-    total_assets = gcol(
-        cf_raw.reindex(features_raw.index) if "Total Assets" in cf_raw.columns
-        else pd.DataFrame(index=features_raw.index),
-        "Total Assets",
-        np.nan,
-    )
-    # Try to use bs_aligned total_assets passed via features_raw index
-    # Fall back to NaN — caller can join balance sheet before calling.
+
+    if bs_raw is not None:
+        total_assets = gcol(bs_raw.reindex(features_raw.index), "Total Assets", np.nan)
+    else:
+        total_assets = gcol(
+            cf_raw.reindex(features_raw.index) if "Total Assets" in cf_raw.columns
+            else pd.DataFrame(index=features_raw.index),
+            "Total Assets",
+            np.nan,
+        )
 
     ocf = gcol(cf, "Cash Flow From Continuing Operating Activities",
                gcol(cf, "Operating Cash Flow", 0))
@@ -144,6 +146,7 @@ def cashflow_features(features_raw, cf_raw) -> pd.DataFrame:
 
     feat["ocf_to_revenue"] = ocf / rev_safe
     feat["fcf_to_revenue"] = fcf / rev_safe
+    feat["fcf_to_assets"] = fcf / total_assets.replace(0, np.nan)
     feat["ocf_to_ni"] = ocf / ni.replace(0, np.nan)
     feat["capex_to_revenue"] = capex / rev_safe
     feat["dep_to_revenue"] = dep / rev_safe
@@ -368,7 +371,7 @@ def build_features(
     feat = profitability_features(features_raw)
     feat = feat.join(size_features(features_raw))
     feat = feat.join(balance_sheet_features(features_raw, bs_raw))
-    feat = feat.join(cashflow_features(features_raw, cf_raw))
+    feat = feat.join(cashflow_features(features_raw, cf_raw, bs_raw))
     feat = annual_growth_features(feat, annual_raw)
     feat = qoq_features(feat, features_raw)
 
