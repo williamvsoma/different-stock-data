@@ -557,7 +557,7 @@ class TestMomentumFeatures:
         mom = momentum_features(inc, cp)
         assert len(mom) == 1
         # Should have used the post-q_date prices
-        has_values = mom.drop(columns=[], errors="ignore").notna().any(axis=1)
+        has_values = mom.notna().any(axis=1)
         assert has_values.iloc[0], "momentum should use prices up to decision_date"
 
 
