@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.feature_selection import f_regression
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
@@ -27,21 +28,33 @@ from stock_data.modeling.predict import (
 )
 
 
-def _select_features(Xtr, threshold=0.3):
+def _select_features(Xtr, ytr, threshold=0.3):
     """Select features when dimensionality ratio is too high.
 
     When ``n_features / n_samples <= threshold`` all columns are returned.
-    Otherwise keeps the top-N highest-variance columns where
+    Otherwise keeps the top-N features ranked by univariate F-statistic
+    against the target (``f_regression``), where
     ``N = floor(n_samples * threshold)``.
+
+    Uses F-statistic rather than variance so that rank features with bounded
+    spread are not penalised relative to raw magnitude features.
     """
     n_samples, n_features = Xtr.shape
     if n_features <= 1 or n_features / n_samples <= threshold:
         return Xtr.columns.tolist()
 
     n_keep = max(1, int(n_samples * threshold))
-    variances = Xtr.var()
-    variances = variances.fillna(0)
-    return variances.nlargest(n_keep).index.tolist()
+
+    # Impute NaNs with column medians before computing F-statistics.
+    # keep_empty_features=True retains all-NaN columns as constant zero vectors
+    # (SimpleImputer fills them with 0 when no observed value exists), which
+    # produces F-score = 0 so they rank last and are not selected.
+    imp = SimpleImputer(strategy="median", keep_empty_features=True)
+    X_imp = imp.fit_transform(Xtr)
+
+    f_scores, _ = f_regression(X_imp, ytr)
+    f_scores = pd.Series(f_scores, index=Xtr.columns).fillna(0)
+    return f_scores.nlargest(n_keep).index.tolist()
 
 
 def walk_forward(risk_model_df, feature_cols_all, close_prices):
@@ -89,7 +102,7 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
             continue
 
         # ── Feature selection for high-dimensionality regimes ──
-        sel_cols = _select_features(Xtr, cfg["feat_ratio_threshold"])
+        sel_cols = _select_features(Xtr, ytr_r, cfg["feat_ratio_threshold"])
         Xtr_sel = Xtr[sel_cols]
         Xte_sel = Xte[sel_cols]
 
