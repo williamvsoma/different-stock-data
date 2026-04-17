@@ -226,28 +226,37 @@ def qoq_features(feat, features_raw) -> pd.DataFrame:
 
 def momentum_features(features_raw, close_prices) -> pd.DataFrame:
     """Price momentum and short-term volatility."""
+    # Pre-group by symbol: O(n) instead of O(n_pairs * n_prices) filtering
+    grouped = {
+        sym: grp.sort_values("date").set_index("date")["close"]
+        for sym, grp in close_prices.groupby("symbol")
+    }
+
     records = []
     for symbol, q_date in features_raw.index.tolist():
         decision_date = q_date + pd.Timedelta(days=EARNINGS_LAG_DAYS)
-        sp = close_prices[
-            (close_prices["symbol"] == symbol) & (close_prices["date"] <= decision_date)
-        ].sort_values("date")
-        if len(sp) < 5:
-            records.append({"symbol": symbol, "date": q_date})
-            continue
-        last_px = sp["close"].iloc[-1]
         rec = {"symbol": symbol, "date": q_date}
+        series = grouped.get(symbol)
+        if series is None:
+            records.append(rec)
+            continue
+        sp = series.loc[:decision_date]
+        if len(sp) < 5:
+            records.append(rec)
+            continue
+        last_px = sp.iloc[-1]
         for label, days in [("momentum_1m", 35), ("momentum_3m", 95),
                             ("momentum_6m", 185), ("momentum_12m", 370)]:
-            window = sp[sp["date"] >= decision_date - pd.Timedelta(days=days)]
+            cutoff = decision_date - pd.Timedelta(days=days)
+            window = sp.loc[cutoff:]
             if len(window) > 0:
-                rec[label] = last_px / window["close"].iloc[0] - 1
-        m1 = sp[sp["date"] >= decision_date - pd.Timedelta(days=35)]
+                rec[label] = last_px / window.iloc[0] - 1
+        m1 = sp.loc[decision_date - pd.Timedelta(days=35):]
         if len(m1) > 5:
-            rec["volatility_1m"] = m1["close"].pct_change().dropna().std()
-        m3 = sp[sp["date"] >= decision_date - pd.Timedelta(days=95)]
+            rec["volatility_1m"] = m1.pct_change().dropna().std()
+        m3 = sp.loc[decision_date - pd.Timedelta(days=95):]
         if len(m3) > 10:
-            rec["volatility_3m"] = m3["close"].pct_change().dropna().std()
+            rec["volatility_3m"] = m3.pct_change().dropna().std()
         if rec.get("momentum_1m") and rec.get("volatility_1m", 0) > 0:
             rec["risk_adj_momentum"] = rec["momentum_1m"] / rec["volatility_1m"]
         if "momentum_12m" in rec and "momentum_1m" in rec:
@@ -303,16 +312,23 @@ def risk_features(returns_full, close_prices) -> pd.DataFrame:
     mkt_mean = mkt_pivot.mean(axis=1)
     mkt_daily_ret = mkt_mean.pct_change().dropna()
 
+    # Pre-group by symbol: O(n) instead of O(n_pairs * n_prices) filtering
+    grouped = {
+        sym: grp.sort_values("date").set_index("date")
+        for sym, grp in close_prices.groupby("symbol")
+    }
+
     records = []
     for sym, q_date in returns_full[["symbol", "date"]].values.tolist():
         buy_dt = q_date + pd.Timedelta(days=EARNINGS_LAG_DAYS)
         lookback_start = buy_dt - pd.Timedelta(days=180)
 
-        hist = close_prices[
-            (close_prices["symbol"] == sym)
-            & (close_prices["date"] >= lookback_start)
-            & (close_prices["date"] < buy_dt)
-        ].sort_values("date").set_index("date")
+        sym_data = grouped.get(sym)
+        if sym_data is None:
+            records.append({"symbol": sym, "date": q_date})
+            continue
+        hist = sym_data.loc[lookback_start:]
+        hist = hist[hist.index < buy_dt]
 
         rec = {"symbol": sym, "date": q_date}
         if len(hist) < 30:
