@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.feature_selection import f_regression
+from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 
@@ -24,6 +26,35 @@ from stock_data.modeling.predict import (
     shrink_to_mean,
     winsorize,
 )
+
+
+def _select_features(Xtr, ytr, threshold=0.3):
+    """Select features when dimensionality ratio is too high.
+
+    When ``n_features / n_samples <= threshold`` all columns are returned.
+    Otherwise keeps the top-N features ranked by univariate F-statistic
+    against the target (``f_regression``), where
+    ``N = floor(n_samples * threshold)``.
+
+    Uses F-statistic rather than variance so that rank features with bounded
+    spread are not penalised relative to raw magnitude features.
+    """
+    n_samples, n_features = Xtr.shape
+    if n_features <= 1 or n_features / n_samples <= threshold:
+        return Xtr.columns.tolist()
+
+    n_keep = max(1, int(n_samples * threshold))
+
+    # Impute NaNs with column medians before computing F-statistics.
+    # keep_empty_features=True retains all-NaN columns as constant zero vectors
+    # (SimpleImputer fills them with 0 when no observed value exists), which
+    # produces F-score = 0 so they rank last and are not selected.
+    imp = SimpleImputer(strategy="median", keep_empty_features=True)
+    X_imp = imp.fit_transform(Xtr)
+
+    f_scores, _ = f_regression(X_imp, ytr)
+    f_scores = pd.Series(f_scores, index=Xtr.columns).fillna(0)
+    return f_scores.nlargest(n_keep).index.tolist()
 
 
 def walk_forward(risk_model_df, feature_cols_all, close_prices):
@@ -54,6 +85,11 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
 
     for td in unique_dates:
         tr_dates = [d for d in unique_dates if d < td]
+
+        max_q = cfg.get("max_train_q")
+        if max_q and len(tr_dates) > max_q:
+            tr_dates = tr_dates[-max_q:]
+
         if len(tr_dates) < cfg["min_train_q"]:
             continue
 
@@ -65,21 +101,30 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         if len(Xtr) < cfg["min_train_rows"] or len(Xte) < cfg["min_test_stocks"]:
             continue
 
+        # ── Feature selection for high-dimensionality regimes ──
+        sel_cols = _select_features(Xtr, ytr_r, cfg["feat_ratio_threshold"])
+        Xtr_sel = Xtr[sel_cols]
+        Xte_sel = Xte[sel_cols]
+
         # ── Ensemble return predictions ──
         xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
-        xgb_m.fit(Xtr, ytr_r, verbose=0)
-        p_xgb = xgb_m.predict(Xte)
+        xgb_m.fit(Xtr_sel, ytr_r, verbose=0)
+        p_xgb = xgb_m.predict(Xte_sel)
+
+        imp = SimpleImputer(strategy="median")
+        Xtr_imp = imp.fit_transform(Xtr_sel)
+        Xte_imp = imp.transform(Xte_sel)
 
         sc = StandardScaler()
-        Xtr_s = sc.fit_transform(Xtr.fillna(0))
-        Xte_s = sc.transform(Xte.fillna(0))
+        Xtr_s = sc.fit_transform(Xtr_imp)
+        Xte_s = sc.transform(Xte_imp)
         ridge_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
         ridge_m.fit(Xtr_s, ytr_r)
         p_rdg = ridge_m.predict(Xte_s)
 
         rf_m = RandomForestRegressor(**RF_PARAMS)
-        rf_m.fit(Xtr.fillna(0), ytr_r)
-        p_rf = rf_m.predict(Xte.fillna(0))
+        rf_m.fit(Xtr_imp, ytr_r)
+        p_rf = rf_m.predict(Xte_imp)
 
         p_ens = ENS_W["xgb"] * p_xgb + ENS_W["ridge"] * p_rdg + ENS_W["rf"] * p_rf
         p_ret = shrink_to_mean(
@@ -87,15 +132,17 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
             cfg["shrinkage_alpha"],
         )
 
+        fi_full = pd.Series(0.0, index=feature_cols_all)
+        fi_full[sel_cols] = xgb_m.feature_importances_
         fi_list.append({
             "date": td,
-            "fi": pd.Series(xgb_m.feature_importances_, index=feature_cols_all),
+            "fi": fi_full,
         })
 
         # ── Volatility model ──
         vol_m = xgb.XGBRegressor(**XGB_PARAMS)
-        vol_m.fit(Xtr, ytr_v, verbose=0)
-        p_vol = np.maximum(vol_m.predict(Xte), 0.05)
+        vol_m.fit(Xtr_sel, ytr_v, verbose=0)
+        p_vol = np.maximum(vol_m.predict(Xte_sel), 0.05)
 
         # ── Covariance ──
         test_syms = Xte.index.get_level_values("symbol").tolist()

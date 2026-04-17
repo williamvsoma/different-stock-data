@@ -20,10 +20,12 @@ PROD_CFG = {
     "winsor_pct": 0.05,
     "cost_bps": 20,
     "min_train_q": 3,
-    "min_train_rows": 400,
+    "min_train_rows": 800,
     "min_test_stocks": 50,
     "risk_aversion": 2.0,
     "cov_lookback_days": 252,
+    "max_train_q": 20,
+    "feat_ratio_threshold": 0.3,
 }
 
 XGB_PARAMS = {
