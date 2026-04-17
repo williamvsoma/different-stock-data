@@ -40,8 +40,9 @@ def _make_sim_data(n_days=504, seed=7):
     dates = pd.bdate_range("2020-01-01", periods=n_days)
     port_vals = 1_000_000 * np.cumprod(1 + rng.normal(0.0004, 0.01, n_days))
     mkt_vals = 1_000_000 * np.cumprod(1 + rng.normal(0.0003, 0.009, n_days))
+    daily_ret = np.concatenate([[0.0], np.diff(port_vals) / port_vals[:-1]])
     sim_df = pd.DataFrame(
-        {"portfolio_value": port_vals, "daily_return": np.diff(port_vals, prepend=port_vals[0]) / port_vals},
+        {"portfolio_value": port_vals, "daily_return": daily_ret},
         index=dates,
     )
     sim_df.index.name = "date"
