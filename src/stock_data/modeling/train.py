@@ -89,9 +89,7 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
             continue
 
         # ── Feature selection for high-dimensionality regimes ──
-        sel_cols = _select_features(
-            Xtr, cfg.get("feat_ratio_threshold", 0.3),
-        )
+        sel_cols = _select_features(Xtr, cfg["feat_ratio_threshold"])
         Xtr_sel = Xtr[sel_cols]
         Xte_sel = Xte[sel_cols]
 
