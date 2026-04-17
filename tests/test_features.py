@@ -539,6 +539,27 @@ class TestMomentumFeatures:
             if len(vals) > 0:
                 assert not np.isinf(vals).any(), f"inf in {c}"
 
+    def test_uses_decision_date_cutoff(self):
+        """Momentum should use prices up to q_date + EARNINGS_LAG_DAYS, not q_date."""
+        from stock_data.config import EARNINGS_LAG_DAYS
+
+        q_date = pd.Timestamp("2022-06-30")
+        decision_date = q_date + pd.Timedelta(days=EARNINGS_LAG_DAYS)
+        idx = _make_index(["A"], [q_date])
+        inc = pd.DataFrame({"Total Revenue": [100.0]}, index=idx)
+
+        # Prices only after q_date but before decision_date
+        dates = pd.bdate_range(q_date + pd.Timedelta(days=1), decision_date)
+        cp = pd.DataFrame({
+            "date": dates, "symbol": "A", "close": range(100, 100 + len(dates)),
+        })
+        # With old cutoff (<= q_date) this would have no data; with decision_date it should
+        mom = momentum_features(inc, cp)
+        assert len(mom) == 1
+        # Should have used the post-q_date prices
+        has_values = mom.notna().any(axis=1)
+        assert has_values.iloc[0], "momentum should use prices up to decision_date"
+
 
 # ── macro_features ─────────────────────────────────────────────────────────────
 
@@ -573,6 +594,24 @@ class TestMacroFeatures:
         inc = pd.DataFrame({"Total Revenue": [100.0]}, index=idx)
         result = macro_features(inc, pd.DataFrame())
         assert len(result.columns) == 0
+
+    def test_uses_decision_date_cutoff(self):
+        """Macro should use data up to q_date + EARNINGS_LAG_DAYS, not q_date."""
+        from stock_data.config import EARNINGS_LAG_DAYS
+
+        q_date = pd.Timestamp("2023-03-31")
+        decision_date = q_date + pd.Timedelta(days=EARNINGS_LAG_DAYS)
+        idx = _make_index(["A"], [q_date])
+        inc = pd.DataFrame({"Total Revenue": [100.0]}, index=idx)
+
+        # Macro data: one entry before q_date, one between q_date and decision_date
+        macro_df = pd.DataFrame(
+            {"vix": [20.0, 30.0]},
+            index=[q_date - pd.Timedelta(days=10), q_date + pd.Timedelta(days=20)],
+        )
+        result = macro_features(inc, macro_df)
+        # Should pick up the more recent value (30.0) available after q_date
+        assert result.loc[("A", q_date), "vix"] == 30.0
 
 
 # ── annual_growth_features ─────────────────────────────────────────────────────

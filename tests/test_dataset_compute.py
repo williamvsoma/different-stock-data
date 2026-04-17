@@ -77,6 +77,21 @@ class TestComputeForwardReturns:
         result = compute_forward_returns(cp, pairs)
         assert len(result) == 0
 
+    def test_buy_date_on_or_after_decision_date(self):
+        """Buy date should be >= q_date + EARNINGS_LAG_DAYS (no backward slack)."""
+        from stock_data.config import EARNINGS_LAG_DAYS
+
+        symbols = ["A"]
+        cp = _make_close_prices(symbols, n_days=500)
+        q_dates = pd.date_range("2022-06-30", periods=2, freq="QE")
+        pairs = _make_sym_date_pairs(symbols, q_dates)
+        result = compute_forward_returns(cp, pairs)
+        for _, row in result.iterrows():
+            decision_date = row["date"] + pd.Timedelta(days=EARNINGS_LAG_DAYS)
+            assert row["buy_date"] >= decision_date, (
+                f"buy_date {row['buy_date']} is before decision_date {decision_date}"
+            )
+
 
 # ── compute_realized_vol ───────────────────────────────────────────────────────
 
