@@ -41,15 +41,14 @@ def filter_by_membership(df: pd.DataFrame, sp500_df: pd.DataFrame) -> pd.DataFra
 
     *df* must have a ``(symbol, date)`` MultiIndex.
     """
+    if len(df) == 0:
+        return df
     idx = df.index.to_frame(index=False)
-    keep = []
-    for date, grp in idx.groupby("date"):
-        members = set(get_universe_at_date(sp500_df, date))
-        keep.append(grp[grp["symbol"].isin(members)])
-    if not keep:
-        return df.iloc[:0]
-    keep_idx = pd.MultiIndex.from_frame(pd.concat(keep, ignore_index=True))
-    return df.loc[df.index.isin(keep_idx)]
+    unique_dates = idx["date"].unique()
+    # Pre-compute membership sets for all dates to avoid redundant filtering
+    membership = {d: set(get_universe_at_date(sp500_df, d)) for d in unique_dates}
+    mask = idx.apply(lambda r: r["symbol"] in membership[r["date"]], axis=1)
+    return df.loc[mask.values]
 
 
 # ── Financial statements ───────────────────────────────────────────────────────

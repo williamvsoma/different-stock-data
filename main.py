@@ -128,7 +128,9 @@ def stage_features():
     # ── 5b. Point-in-time universe filter (removes survivorship bias) ──
     before = len(risk_model_df)
     risk_model_df = filter_by_membership(risk_model_df, sp500)
-    print(f"  Point-in-time membership filter: {before:,} → {len(risk_model_df):,} rows")
+    pct = 100 * len(risk_model_df) / before if before else 0
+    print(f"  Point-in-time membership filter (survivorship bias removal): "
+          f"{before:,} → {len(risk_model_df):,} rows ({pct:.1f}% retained)")
 
     # Save processed data
     risk_model_df.to_parquet(PROCESSED / "risk_model_df.parquet")
