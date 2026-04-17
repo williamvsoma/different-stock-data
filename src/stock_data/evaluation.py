@@ -16,7 +16,7 @@ from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 
 from stock_data.config import (
-    EARNINGS_LAG_DAYS, ENS_W, XGB_PARAMS, RIDGE_PARAMS, RF_PARAMS,
+    EARNINGS_LAG_DAYS, ENS_W, PROD_CFG, XGB_PARAMS, RIDGE_PARAMS, RF_PARAMS,
     COST_BPS, WEIGHT_THRESHOLD, N_BOOT,
 )
 from stock_data.modeling.predict import bootstrap_ci, safe_spearmanr
@@ -415,23 +415,33 @@ def run_iteration_analysis(
 
         if len(stable_feat) >= 5:
             print(f"  Re-running with {len(stable_feat)} stable features...")
+            unique_dates = sorted(dp.unique())
+            max_q = PROD_CFG.get("max_train_q")
             stable_results = []
             for _, row in prod_df.iterrows():
                 td = row["test_date"]
-                tr_m, te_m = dp < td, dp == td
+                tr_dates = [d for d in unique_dates if d < td]
+                if max_q and len(tr_dates) > max_q:
+                    tr_dates = tr_dates[-max_q:]
+                tr_m = dp.isin(tr_dates)
+                te_m = dp == td
                 if tr_m.sum() < 50:
                     continue
-                sc = StandardScaler()
-                imp = SimpleImputer(strategy="median")
-                X_tr_n = sc.fit_transform(imp.fit_transform(X_p.loc[tr_m, stable_feat].values))
-                X_te_n = sc.transform(imp.transform(X_p.loc[te_m, stable_feat].values))
+                Xtr_raw = X_p.loc[tr_m, stable_feat]
+                Xte_raw = X_p.loc[te_m, stable_feat]
+                # XGBoost handles NaN natively (matches train.py)
                 xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
-                xgb_m.fit(X_tr_n, y_ret_p[tr_m], verbose=0)
+                xgb_m.fit(Xtr_raw, y_ret_p[tr_m], verbose=0)
+                # Ridge and RF get median-imputed + scaled data
+                imp = SimpleImputer(strategy="median")
+                sc = StandardScaler()
+                X_tr_n = sc.fit_transform(imp.fit_transform(Xtr_raw.values))
+                X_te_n = sc.transform(imp.transform(Xte_raw.values))
                 rdg_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
                 rdg_m.fit(X_tr_n, y_ret_p[tr_m])
                 rf_m = RandomForestRegressor(**RF_PARAMS)
                 rf_m.fit(X_tr_n, y_ret_p[tr_m])
-                p_ens = (ENS_W["xgb"] * xgb_m.predict(X_te_n)
+                p_ens = (ENS_W["xgb"] * xgb_m.predict(Xte_raw)
                          + ENS_W["ridge"] * rdg_m.predict(X_te_n)
                          + ENS_W["rf"] * rf_m.predict(X_te_n))
                 rrc, _ = spearmanr(p_ens, y_ret_p[te_m])
