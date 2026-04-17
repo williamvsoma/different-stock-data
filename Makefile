@@ -1,4 +1,4 @@
-.PHONY: all data features train reports clean install
+.PHONY: all data features train reports clean install test
 
 ## Run the full pipeline (data → features → train → evaluate → save artifacts)
 all:
@@ -19,6 +19,10 @@ train:
 ## Install / sync dependencies
 install:
 	uv sync
+
+## Run the test suite
+test:
+	uv run pytest tests/ -v
 
 ## Export report notebooks to HTML in reports/
 reports:
