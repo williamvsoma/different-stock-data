@@ -38,7 +38,7 @@ XGB_PARAMS = {
     "random_state": 42,
 }
 
-RIDGE_PARAMS = {"alpha": 10.0}
+RIDGE_PARAMS: dict[str, float] = {"alpha": 10.0}
 
 RF_PARAMS = {
     "n_estimators": 200,
