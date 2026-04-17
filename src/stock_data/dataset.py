@@ -1,12 +1,16 @@
 """Data acquisition: download financials, prices, and macro data from yfinance."""
 
+import logging
 import time
 
 import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 
 from stock_data.config import EARNINGS_LAG_DAYS, MACRO_TICKERS
+
+logger = logging.getLogger(__name__)
 
 
 # ── S&P 500 universe ──────────────────────────────────────────────────────────
@@ -37,8 +41,9 @@ def _fetch_statements(symbols, accessor, label, sleep_every=50):
             stmt = getattr(ticker, accessor)
             if stmt is not None and not stmt.empty:
                 data[symbol] = stmt
-        except Exception as e:
+        except (requests.exceptions.RequestException, KeyError, ValueError) as e:
             failed.append((symbol, str(e)))
+            logger.warning("Failed to fetch %s for %s: %s", label, symbol, e)
         if (i + 1) % sleep_every == 0:
             print(f"  {label}: {i + 1}/{len(symbols)}...")
             time.sleep(1)
