@@ -2,8 +2,15 @@
 
 Saves intermediate artifacts to data/interim/, data/processed/, and models/
 so that report notebooks can load results without re-downloading.
+
+Usage:
+    python main.py             # run all stages
+    python main.py --stage data      # download & save interim data only
+    python main.py --stage features  # build features from interim data
+    python main.py --stage train     # train models from processed data
 """
 
+import argparse
 import pickle
 from pathlib import Path
 
@@ -47,9 +54,9 @@ MODELS = Path("models")
 FIGURES = Path("reports/figures")
 
 
-def main():
-    for d in [INTERIM, PROCESSED, MODELS, FIGURES]:
-        d.mkdir(parents=True, exist_ok=True)
+def stage_data():
+    """Download raw data and save interim parquet files."""
+    INTERIM.mkdir(parents=True, exist_ok=True)
 
     # ── 1. Load universe ──
     sp500 = load_sp500_universe("data/raw/sp500_monthly.csv")
@@ -88,8 +95,21 @@ def main():
     macro_df.to_parquet(INTERIM / "macro_df.parquet")
     print(f"  Interim data saved to {INTERIM}/")
 
+
+def stage_features():
+    """Build features from interim data and save processed parquet files."""
+    PROCESSED.mkdir(parents=True, exist_ok=True)
+
+    # Load interim data
+    features_raw = pd.read_parquet(INTERIM / "features_raw.parquet")
+    bs_raw = pd.read_parquet(INTERIM / "bs_raw.parquet")
+    cf_raw = pd.read_parquet(INTERIM / "cf_raw.parquet")
+    annual_raw = pd.read_parquet(INTERIM / "annual_raw.parquet")
+    close_prices = pd.read_parquet(INTERIM / "close_prices.parquet")
+    macro_df = pd.read_parquet(INTERIM / "macro_df.parquet")
+
     # ── 4. Forward returns & vol ──
-    sym_date_pairs = combined.index.droplevel("item").unique()
+    sym_date_pairs = features_raw.index.droplevel("item").unique()
     returns_df = compute_forward_returns(close_prices, sym_date_pairs)
     returns_df["return_quantile"] = returns_df.groupby("date")["next_q_return"].rank(pct=True)
 
@@ -107,6 +127,18 @@ def main():
     with open(PROCESSED / "feature_cols.pkl", "wb") as f:
         pickle.dump(feature_cols, f)
     print(f"  Processed data saved to {PROCESSED}/")
+
+
+def stage_train():
+    """Run walk-forward backtest, evaluate, and save model outputs."""
+    MODELS.mkdir(parents=True, exist_ok=True)
+    FIGURES.mkdir(parents=True, exist_ok=True)
+
+    # Load processed data
+    risk_model_df = pd.read_parquet(PROCESSED / "risk_model_df.parquet")
+    with open(PROCESSED / "feature_cols.pkl", "rb") as f:
+        feature_cols = pickle.load(f)
+    close_prices = pd.read_parquet(INTERIM / "close_prices.parquet")
 
     # ── 6. Walk-forward backtest ──
     prod_df, prod_fi, weights_history = walk_forward(
@@ -154,7 +186,30 @@ def main():
         risk_model_df, feature_cols, close_prices,
     )
 
-    print("\nPipeline complete. Artifacts saved to data/ and models/.")
+    print("\nTraining complete. Artifacts saved to models/ and reports/figures/.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Stock data pipeline")
+    parser.add_argument(
+        "--stage",
+        choices=["data", "features", "train"],
+        default=None,
+        help="Run a single pipeline stage instead of the full pipeline",
+    )
+    args = parser.parse_args()
+
+    if args.stage == "data":
+        stage_data()
+    elif args.stage == "features":
+        stage_features()
+    elif args.stage == "train":
+        stage_train()
+    else:
+        stage_data()
+        stage_features()
+        stage_train()
+        print("\nPipeline complete. Artifacts saved to data/ and models/.")
 
 
 if __name__ == "__main__":
