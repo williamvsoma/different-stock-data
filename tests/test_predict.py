@@ -8,6 +8,7 @@ from stock_data.modeling.predict import (
     mv_optimize,
     mv_optimize_diag,
     portfolio_turnover,
+    safe_spearmanr,
     shrink_to_mean,
     winsorize,
 )
@@ -218,3 +219,35 @@ class TestBootstrapCi:
         r2 = bootstrap_ci(vals, n_boot=100, seed=99)
         assert r1[0] == r2[0]
         assert r1[1] == r2[1]
+
+
+# ── safe_spearmanr ─────────────────────────────────────────────────────────────
+
+
+class TestSafeSpearmanr:
+    def test_perfect_positive_correlation(self):
+        a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        assert safe_spearmanr(a, a) == pytest.approx(1.0)
+
+    def test_perfect_negative_correlation(self):
+        a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        b = np.array([5.0, 4.0, 3.0, 2.0, 1.0])
+        assert safe_spearmanr(a, b) == pytest.approx(-1.0)
+
+    def test_too_few_elements_returns_nan(self):
+        a = np.array([1.0, 2.0, 3.0])
+        b = np.array([3.0, 2.0, 1.0])
+        assert np.isnan(safe_spearmanr(a, b))
+
+    def test_result_in_valid_range(self):
+        rng = np.random.default_rng(0)
+        a = rng.standard_normal(50)
+        b = rng.standard_normal(50)
+        r = safe_spearmanr(a, b)
+        assert -1.0 <= r <= 1.0
+
+    def test_constant_input_returns_nan(self):
+        a = np.ones(10)
+        b = np.arange(10, dtype=float)
+        r = safe_spearmanr(a, b)
+        assert np.isnan(r)

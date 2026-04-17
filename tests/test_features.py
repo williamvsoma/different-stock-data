@@ -5,11 +5,17 @@ import pandas as pd
 import pytest
 
 from stock_data.features import (
+    annual_growth_features,
+    balance_sheet_features,
     cashflow_features,
+    clip_outliers,
     cross_sectional_ranks,
     gcol,
+    macro_features,
+    momentum_features,
     profitability_features,
     qoq_diff,
+    qoq_features,
     qoq_growth,
     size_features,
 )
@@ -311,3 +317,297 @@ class TestQoqDiff:
         d = qoq_diff(s)
         assert d.loc["A"].iloc[1] == pytest.approx(10.0)
         assert d.loc["B"].iloc[1] == pytest.approx(10.0)
+
+
+# ── balance_sheet helpers ──────────────────────────────────────────────────────
+
+
+def _basic_bs_df(idx):
+    """Return a minimal balance-sheet DataFrame."""
+    rng = np.random.default_rng(3)
+    size = len(idx)
+    return pd.DataFrame(
+        {
+            "Total Assets": rng.integers(500, 5000, size).astype(float),
+            "Stockholders Equity": rng.integers(100, 2000, size).astype(float),
+            "Total Debt": rng.integers(50, 1000, size).astype(float),
+            "Current Assets": rng.integers(100, 1500, size).astype(float),
+            "Current Liabilities": rng.integers(50, 800, size).astype(float),
+            "Cash And Cash Equivalents": rng.integers(20, 500, size).astype(float),
+            "Inventory": rng.integers(10, 200, size).astype(float),
+            "Accounts Receivable": rng.integers(10, 300, size).astype(float),
+        },
+        index=idx,
+    )
+
+
+# ── balance_sheet_features ─────────────────────────────────────────────────────
+
+
+class TestBalanceSheetFeatures:
+    def test_output_columns_present(self):
+        inc = _basic_income_df()
+        bs = _basic_bs_df(inc.index)
+        feat = balance_sheet_features(inc, bs)
+        expected = {
+            "roe", "roa", "roic", "debt_to_equity", "debt_to_assets",
+            "leverage_ratio", "current_ratio", "quick_ratio", "cash_ratio",
+            "asset_turnover", "receivables_turnover", "inventory_turnover",
+            "working_capital_ratio", "cash_to_assets", "log_total_assets",
+            "log_equity",
+        }
+        assert expected.issubset(set(feat.columns))
+
+    def test_no_inf_values(self):
+        inc = _basic_income_df()
+        bs = _basic_bs_df(inc.index)
+        feat = balance_sheet_features(inc, bs)
+        assert not np.isinf(feat.values).any()
+
+    def test_zero_equity_gives_nan_not_inf(self):
+        inc = _basic_income_df()
+        bs = _basic_bs_df(inc.index)
+        bs["Stockholders Equity"] = 0.0
+        feat = balance_sheet_features(inc, bs)
+        assert not np.isinf(feat.values).any()
+        assert feat["roe"].isna().all()
+
+    def test_zero_assets_gives_nan_not_inf(self):
+        inc = _basic_income_df()
+        bs = _basic_bs_df(inc.index)
+        bs["Total Assets"] = 0.0
+        feat = balance_sheet_features(inc, bs)
+        assert not np.isinf(feat.values).any()
+        assert feat["roa"].isna().all()
+
+    def test_output_index_matches_input(self):
+        inc = _basic_income_df()
+        bs = _basic_bs_df(inc.index)
+        feat = balance_sheet_features(inc, bs)
+        assert feat.index.equals(inc.index)
+
+    def test_current_ratio_positive(self):
+        """With positive assets and liabilities, current ratio > 0."""
+        inc = _basic_income_df()
+        bs = _basic_bs_df(inc.index)
+        feat = balance_sheet_features(inc, bs)
+        valid = feat["current_ratio"].dropna()
+        assert (valid > 0).all()
+
+
+# ── qoq_features ──────────────────────────────────────────────────────────────
+
+
+class TestQoqFeatures:
+    def _make_feat_with_prereqs(self):
+        """Build feat DataFrame with columns that qoq_features reads."""
+        inc = _basic_income_df(n_symbols=2, n_dates=4)
+        bs = _basic_bs_df(inc.index)
+        feat = profitability_features(inc)
+        feat = feat.join(size_features(inc))
+        feat = feat.join(balance_sheet_features(inc, bs))
+        cf_rng = np.random.default_rng(10)
+        size = len(inc)
+        cf = pd.DataFrame(
+            {
+                "Cash Flow From Continuing Operating Activities": cf_rng.integers(10, 200, size).astype(float),
+                "Capital Expenditure": cf_rng.integers(1, 80, size).astype(float),
+                "Depreciation And Amortization": cf_rng.integers(5, 60, size).astype(float),
+                "Cash Dividends Paid": cf_rng.integers(0, 30, size).astype(float),
+            },
+            index=inc.index,
+        )
+        feat = feat.join(cashflow_features(inc, cf))
+        return feat, inc
+
+    def test_output_columns_present(self):
+        feat, inc = self._make_feat_with_prereqs()
+        result = qoq_features(feat, inc)
+        expected = {
+            "revenue_growth_qoq", "ni_growth_qoq", "ebitda_growth_qoq",
+            "gross_margin_chg", "operating_margin_chg", "net_margin_chg",
+            "roe_chg", "roa_chg", "leverage_chg",
+        }
+        assert expected.issubset(set(result.columns))
+
+    def test_first_quarter_is_nan(self):
+        """QoQ changes should be NaN for first quarter per symbol."""
+        feat, inc = self._make_feat_with_prereqs()
+        result = qoq_features(feat, inc)
+        for sym in ["S0", "S1"]:
+            first_val = result.loc[sym, "revenue_growth_qoq"].iloc[0]
+            assert pd.isna(first_val)
+
+    def test_no_inf_values(self):
+        feat, inc = self._make_feat_with_prereqs()
+        result = qoq_features(feat, inc)
+        for c in result.columns:
+            vals = result[c].dropna().values
+            if len(vals) > 0:
+                assert not np.isinf(vals).any(), f"inf found in {c}"
+
+    def test_output_index_matches_input(self):
+        feat, inc = self._make_feat_with_prereqs()
+        result = qoq_features(feat, inc)
+        assert result.index.equals(feat.index)
+
+
+# ── clip_outliers ──────────────────────────────────────────────────────────────
+
+
+class TestClipOutliers:
+    def _make_df_with_outliers(self):
+        symbols = [f"S{i}" for i in range(20)]
+        dates = pd.date_range("2023-01-01", periods=2, freq="QE")
+        idx = _make_index(symbols, dates)
+        rng = np.random.default_rng(42)
+        df = pd.DataFrame(
+            {"feat_a": rng.standard_normal(len(idx)),
+             "feat_b": rng.standard_normal(len(idx))},
+            index=idx,
+        )
+        # Inject extreme outlier well beyond 5σ
+        df.iloc[0, 0] = 1000.0
+        return df
+
+    def test_outlier_clipped(self):
+        df = self._make_df_with_outliers()
+        original_max = df["feat_a"].max()
+        result = clip_outliers(df.copy(), ["feat_a", "feat_b"], n_std=2)
+        assert result["feat_a"].max() < original_max
+
+    def test_shape_preserved(self):
+        df = self._make_df_with_outliers()
+        result = clip_outliers(df.copy(), ["feat_a"], n_std=5)
+        assert result.shape == df.shape
+
+    def test_missing_column_ignored(self):
+        df = self._make_df_with_outliers()
+        result = clip_outliers(df.copy(), ["feat_a", "nonexistent"], n_std=5)
+        assert result.shape == df.shape
+
+    def test_no_inf_after_clip(self):
+        df = self._make_df_with_outliers()
+        df.iloc[1, 1] = np.inf
+        df = df.replace([np.inf, -np.inf], np.nan)
+        result = clip_outliers(df.copy(), ["feat_a", "feat_b"], n_std=5)
+        assert not np.isinf(result.values[~np.isnan(result.values)]).any()
+
+
+# ── momentum_features ──────────────────────────────────────────────────────────
+
+
+def _make_close_prices(symbols, n_days=400):
+    """Build a tidy close_prices DataFrame."""
+    rng = np.random.default_rng(7)
+    dates = pd.bdate_range("2022-01-01", periods=n_days)
+    frames = []
+    for sym in symbols:
+        px = 100 * np.exp(np.cumsum(rng.normal(0.0003, 0.02, n_days)))
+        frames.append(pd.DataFrame({"date": dates, "symbol": sym, "close": px}))
+    return pd.concat(frames, ignore_index=True)
+
+
+class TestMomentumFeatures:
+    def test_output_has_momentum_columns(self):
+        symbols = ["A", "B"]
+        dates = pd.date_range("2023-01-01", periods=2, freq="QE")
+        idx = _make_index(symbols, dates)
+        inc = pd.DataFrame({"Total Revenue": [100.0] * len(idx)}, index=idx)
+        cp = _make_close_prices(symbols)
+        mom = momentum_features(inc, cp)
+        assert "momentum_1m" in mom.columns
+
+    def test_output_index_is_symbol_date(self):
+        symbols = ["X"]
+        dates = pd.date_range("2023-06-30", periods=1, freq="QE")
+        idx = _make_index(symbols, dates)
+        inc = pd.DataFrame({"Total Revenue": [100.0]}, index=idx)
+        cp = _make_close_prices(symbols)
+        mom = momentum_features(inc, cp)
+        assert list(mom.index.names) == ["symbol", "date"]
+
+    def test_no_inf_values(self):
+        symbols = ["A", "B"]
+        dates = pd.date_range("2023-01-01", periods=2, freq="QE")
+        idx = _make_index(symbols, dates)
+        inc = pd.DataFrame({"Total Revenue": [100.0] * len(idx)}, index=idx)
+        cp = _make_close_prices(symbols)
+        mom = momentum_features(inc, cp)
+        for c in mom.columns:
+            vals = mom[c].dropna().values
+            if len(vals) > 0:
+                assert not np.isinf(vals).any(), f"inf in {c}"
+
+
+# ── macro_features ─────────────────────────────────────────────────────────────
+
+
+class TestMacroFeatures:
+    def test_output_maps_macro_to_index(self):
+        symbols = ["A", "B"]
+        dates = pd.date_range("2023-01-01", periods=2, freq="QE")
+        idx = _make_index(symbols, dates)
+        inc = pd.DataFrame({"Total Revenue": [100.0] * len(idx)}, index=idx)
+        macro_df = pd.DataFrame(
+            {"vix": [20.0, 22.0, 25.0], "yield_curve": [0.5, 0.4, 0.3]},
+            index=pd.date_range("2023-01-01", periods=3, freq="ME"),
+        )
+        result = macro_features(inc, macro_df)
+        assert "vix" in result.columns
+        assert result.index.equals(inc.index)
+
+    def test_empty_macro_returns_empty_cols(self):
+        symbols = ["A"]
+        dates = pd.date_range("2023-01-01", periods=1, freq="QE")
+        idx = _make_index(symbols, dates)
+        inc = pd.DataFrame({"Total Revenue": [100.0]}, index=idx)
+        result = macro_features(inc, None)
+        assert len(result.columns) == 0
+        assert result.index.equals(inc.index)
+
+    def test_none_macro_returns_empty(self):
+        symbols = ["A"]
+        dates = pd.date_range("2023-01-01", periods=1, freq="QE")
+        idx = _make_index(symbols, dates)
+        inc = pd.DataFrame({"Total Revenue": [100.0]}, index=idx)
+        result = macro_features(inc, pd.DataFrame())
+        assert len(result.columns) == 0
+
+
+# ── annual_growth_features ─────────────────────────────────────────────────────
+
+
+class TestAnnualGrowthFeatures:
+    def test_none_annual_returns_unchanged(self):
+        symbols = ["A"]
+        dates = pd.date_range("2023-01-01", periods=2, freq="QE")
+        idx = _make_index(symbols, dates)
+        feat = pd.DataFrame({"gross_margin": [0.3, 0.4]}, index=idx)
+        result = annual_growth_features(feat, None)
+        assert result.equals(feat)
+
+    def test_empty_annual_returns_unchanged(self):
+        symbols = ["A"]
+        dates = pd.date_range("2023-01-01", periods=2, freq="QE")
+        idx = _make_index(symbols, dates)
+        feat = pd.DataFrame({"gross_margin": [0.3, 0.4]}, index=idx)
+        result = annual_growth_features(feat, pd.DataFrame())
+        assert result.equals(feat)
+
+    def test_annual_growth_columns_added(self):
+        symbols = ["A"]
+        q_dates = pd.date_range("2023-01-01", periods=4, freq="QE")
+        idx = _make_index(symbols, q_dates)
+        feat = pd.DataFrame({"gross_margin": [0.3, 0.35, 0.32, 0.38]}, index=idx)
+
+        a_dates = pd.date_range("2021-12-31", periods=3, freq="YE")
+        a_idx = _make_index(symbols, a_dates)
+        annual_raw = pd.DataFrame(
+            {"Total Revenue": [100.0, 120.0, 150.0],
+             "Net Income": [10.0, 15.0, 20.0],
+             "EBITDA": [30.0, 40.0, 55.0]},
+            index=a_idx,
+        )
+        result = annual_growth_features(feat, annual_raw)
+        assert "annual_rev_growth" in result.columns
