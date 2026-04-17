@@ -628,27 +628,21 @@ class TestAnnualGrowthFeatures:
             index=a_idx,
         )
 
-        # Query date is 1 day before the lag-shifted annual date
-        # FY 2023-12-31 + 90d = 2024-03-31; query at 2024-03-30 → too early
+        # Query date is 1 day before the lag-shifted FY2023 date.
+        # FY2023-12-31 + 90d = 2024-03-31; query at 2024-03-30 → too early.
+        # merge_asof falls back to lag-shifted FY2022 (2023-03-31), whose
+        # growth is NaN (first row of pct_change).
         early_date = pd.Timestamp("2023-12-31") + pd.Timedelta(days=ANNUAL_FILING_LAG - 1)
-        q_dates_early = [early_date]
-        idx_early = _make_index(symbols, q_dates_early)
+        idx_early = _make_index(symbols, [early_date])
         feat_early = pd.DataFrame({"gross_margin": [0.3]}, index=idx_early)
 
         result_early = annual_growth_features(feat_early, annual_raw)
-        # FY2023 growth should NOT be mapped yet (only FY2022 may appear)
         if "annual_rev_growth" in result_early.columns:
-            val = result_early["annual_rev_growth"].iloc[0]
-            # FY2023 growth would be (120-100)/100 = 0.20
-            # It must be NaN (no annual data available) because FY2023 hasn't
-            # been filed yet and FY2022 lag-shifted date (2023-03-31) is within
-            # the 400-day tolerance window.
-            assert pd.isna(val) or abs(val - 0.20) > 1e-9
+            assert pd.isna(result_early["annual_rev_growth"].iloc[0])
 
         # Query date is exactly at the lag boundary → FY2023 should be available
         lag_date = pd.Timestamp("2023-12-31") + pd.Timedelta(days=ANNUAL_FILING_LAG)
-        q_dates_lag = [lag_date]
-        idx_lag = _make_index(symbols, q_dates_lag)
+        idx_lag = _make_index(symbols, [lag_date])
         feat_lag = pd.DataFrame({"gross_margin": [0.3]}, index=idx_lag)
 
         result_lag = annual_growth_features(feat_lag, annual_raw)
