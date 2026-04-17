@@ -46,8 +46,9 @@ def _select_features(Xtr, ytr, threshold=0.3):
     n_keep = max(1, int(n_samples * threshold))
 
     # Impute NaNs with column medians before computing F-statistics.
-    # keep_empty_features=True ensures all-NaN columns stay (imputed to 0)
-    # so F-scores can be computed for all original columns.
+    # keep_empty_features=True retains all-NaN columns as constant zero vectors
+    # (SimpleImputer fills them with 0 when no observed value exists), which
+    # produces F-score = 0 so they rank last and are not selected.
     imp = SimpleImputer(strategy="median", keep_empty_features=True)
     X_imp = imp.fit_transform(Xtr)
 
