@@ -30,6 +30,7 @@ from stock_data.dataset import (
     fetch_quarterly_cashflows,
     fetch_quarterly_income,
     drop_sparse_pairs,
+    filter_by_membership,
     get_active_symbols,
     load_sp500_universe,
     pivot_statements,
@@ -61,7 +62,7 @@ def stage_data():
     # ── 1. Load universe ──
     sp500 = load_sp500_universe("data/raw/sp500_monthly.csv")
     symbols = get_active_symbols(sp500)
-    print(f"Active S&P 500 symbols: {len(symbols)}")
+    print(f"S&P 500 symbols (current + historical): {len(symbols)}")
 
     # ── 2. Fetch financial statements ──
     qi, _ = fetch_quarterly_income(symbols)
@@ -93,6 +94,7 @@ def stage_data():
     annual_raw.to_parquet(INTERIM / "annual_raw.parquet")
     close_prices.to_parquet(INTERIM / "close_prices.parquet")
     macro_df.to_parquet(INTERIM / "macro_df.parquet")
+    sp500.to_parquet(INTERIM / "sp500_membership.parquet")
     print(f"  Interim data saved to {INTERIM}/")
 
 
@@ -107,6 +109,7 @@ def stage_features():
     annual_raw = pd.read_parquet(INTERIM / "annual_raw.parquet")
     close_prices = pd.read_parquet(INTERIM / "close_prices.parquet")
     macro_df = pd.read_parquet(INTERIM / "macro_df.parquet")
+    sp500 = pd.read_parquet(INTERIM / "sp500_membership.parquet")
 
     # ── 4. Forward returns & vol ──
     sym_date_pairs = features_raw.index
@@ -121,6 +124,13 @@ def stage_features():
         features_raw, bs_raw, cf_raw, annual_raw,
         close_prices, macro_df, returns_df, returns_full,
     )
+
+    # ── 5b. Point-in-time universe filter (removes survivorship bias) ──
+    before = len(risk_model_df)
+    risk_model_df = filter_by_membership(risk_model_df, sp500)
+    pct = 100 * len(risk_model_df) / before if before else 0
+    print(f"  Point-in-time membership filter (survivorship bias removal): "
+          f"{before:,} → {len(risk_model_df):,} rows ({pct:.1f}% retained)")
 
     # Save processed data
     risk_model_df.to_parquet(PROCESSED / "risk_model_df.parquet")

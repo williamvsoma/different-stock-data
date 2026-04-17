@@ -17,14 +17,38 @@ logger = logging.getLogger(__name__)
 
 
 def load_sp500_universe(path: str) -> pd.DataFrame:
-    """Load the S&P 500 membership table and return currently active symbols."""
+    """Load the full S&P 500 membership table (current and historical members)."""
     sp = pd.read_csv(path, parse_dates=["date_added", "date_removed"])
-    current = sp[sp["date_removed"].isna()]
-    return current
+    return sp
 
 
 def get_active_symbols(sp500_df: pd.DataFrame) -> list[str]:
     return sp500_df["symbol"].unique().tolist()
+
+
+def get_universe_at_date(sp500_df: pd.DataFrame, as_of_date) -> list[str]:
+    """Return symbols that were in the S&P 500 as of *as_of_date*."""
+    as_of_date = pd.Timestamp(as_of_date)
+    mask = (
+        (sp500_df["date_added"] <= as_of_date)
+        & (sp500_df["date_removed"].isna() | (sp500_df["date_removed"] > as_of_date))
+    )
+    return sp500_df.loc[mask, "symbol"].unique().tolist()
+
+
+def filter_by_membership(df: pd.DataFrame, sp500_df: pd.DataFrame) -> pd.DataFrame:
+    """Keep only (symbol, date) rows where the symbol was in the S&P 500 at that date.
+
+    *df* must have a ``(symbol, date)`` MultiIndex.
+    """
+    if len(df) == 0:
+        return df
+    idx = df.index.to_frame(index=False)
+    unique_dates = idx["date"].unique()
+    # Pre-compute membership sets for all dates to avoid redundant filtering
+    membership = {d: set(get_universe_at_date(sp500_df, d)) for d in unique_dates}
+    mask = idx.apply(lambda r: r["symbol"] in membership[r["date"]], axis=1)
+    return df.loc[mask.values]
 
 
 # ── Financial statements ───────────────────────────────────────────────────────

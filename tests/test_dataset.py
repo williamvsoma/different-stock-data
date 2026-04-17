@@ -6,6 +6,9 @@ import pytest
 
 from stock_data.dataset import (
     drop_sparse_pairs,
+    filter_by_membership,
+    get_universe_at_date,
+    load_sp500_universe,
     pivot_statements,
     reshape_annual_income,
     reshape_statements,
@@ -208,3 +211,126 @@ class TestReshapeAnnualIncome:
         result = reshape_annual_income(annual_dict)
         # Each symbol × year produces one row
         assert len(result) == len(symbols) * n_years
+
+
+# ── Helpers for universe tests ─────────────────────────────────────────────────
+
+
+def _make_sp500_df():
+    """Build a synthetic S&P 500 membership table."""
+    return pd.DataFrame({
+        "symbol": ["AAPL", "MSFT", "ENRN", "LHMN"],
+        "date_added": pd.to_datetime([
+            "2000-01-01", "2000-01-01", "2000-01-01", "2010-06-01",
+        ]),
+        "date_removed": pd.to_datetime([
+            pd.NaT, pd.NaT, "2005-06-01", "2015-12-31",
+        ]),
+    })
+
+
+# ── load_sp500_universe ───────────────────────────────────────────────────────
+
+
+class TestLoadSp500Universe:
+    def test_returns_full_table(self):
+        result = load_sp500_universe("data/raw/sp500_monthly.csv")
+        # Should contain both current and removed members
+        assert result["date_removed"].notna().any()
+        assert result["date_removed"].isna().any()
+
+    def test_all_rows_returned(self):
+        result = load_sp500_universe("data/raw/sp500_monthly.csv")
+        raw = pd.read_csv("data/raw/sp500_monthly.csv")
+        assert len(result) == len(raw)
+
+
+# ── get_universe_at_date ──────────────────────────────────────────────────────
+
+
+class TestGetUniverseAtDate:
+    def test_current_members_included(self):
+        sp = _make_sp500_df()
+        members = get_universe_at_date(sp, "2020-01-01")
+        assert "AAPL" in members
+        assert "MSFT" in members
+
+    def test_removed_member_excluded_after_removal(self):
+        sp = _make_sp500_df()
+        members = get_universe_at_date(sp, "2010-01-01")
+        assert "ENRN" not in members
+
+    def test_removed_member_included_before_removal(self):
+        sp = _make_sp500_df()
+        members = get_universe_at_date(sp, "2003-01-01")
+        assert "ENRN" in members
+
+    def test_member_not_included_before_addition(self):
+        sp = _make_sp500_df()
+        members = get_universe_at_date(sp, "2005-01-01")
+        assert "LHMN" not in members
+
+    def test_member_included_after_addition(self):
+        sp = _make_sp500_df()
+        members = get_universe_at_date(sp, "2012-01-01")
+        assert "LHMN" in members
+
+    def test_member_excluded_after_removal(self):
+        sp = _make_sp500_df()
+        members = get_universe_at_date(sp, "2016-06-01")
+        assert "LHMN" not in members
+
+    def test_returns_unique_symbols(self):
+        sp = _make_sp500_df()
+        members = get_universe_at_date(sp, "2020-01-01")
+        assert len(members) == len(set(members))
+
+
+# ── filter_by_membership ──────────────────────────────────────────────────────
+
+
+class TestFilterByMembership:
+    def _make_indexed_df(self):
+        """Build a (symbol, date) indexed DataFrame with known membership periods."""
+        idx = pd.MultiIndex.from_tuples([
+            ("AAPL", pd.Timestamp("2003-01-01")),  # always in → keep
+            ("ENRN", pd.Timestamp("2003-01-01")),  # in S&P before 2005-06 → keep
+            ("ENRN", pd.Timestamp("2010-01-01")),  # removed by then → drop
+            ("LHMN", pd.Timestamp("2005-01-01")),  # not added until 2010 → drop
+            ("LHMN", pd.Timestamp("2012-01-01")),  # added and active → keep
+        ], names=["symbol", "date"])
+        return pd.DataFrame({"value": [1, 2, 3, 4, 5]}, index=idx)
+
+    def test_keeps_valid_membership(self):
+        sp = _make_sp500_df()
+        df = self._make_indexed_df()
+        result = filter_by_membership(df, sp)
+        assert ("AAPL", pd.Timestamp("2003-01-01")) in result.index
+        assert ("ENRN", pd.Timestamp("2003-01-01")) in result.index
+        assert ("LHMN", pd.Timestamp("2012-01-01")) in result.index
+
+    def test_drops_invalid_membership(self):
+        sp = _make_sp500_df()
+        df = self._make_indexed_df()
+        result = filter_by_membership(df, sp)
+        assert ("ENRN", pd.Timestamp("2010-01-01")) not in result.index
+        assert ("LHMN", pd.Timestamp("2005-01-01")) not in result.index
+
+    def test_row_count(self):
+        sp = _make_sp500_df()
+        df = self._make_indexed_df()
+        result = filter_by_membership(df, sp)
+        assert len(result) == 3
+
+    def test_empty_dataframe(self):
+        sp = _make_sp500_df()
+        idx = pd.MultiIndex.from_tuples([], names=["symbol", "date"])
+        df = pd.DataFrame({"value": []}, index=idx)
+        result = filter_by_membership(df, sp)
+        assert len(result) == 0
+
+    def test_values_preserved(self):
+        sp = _make_sp500_df()
+        df = self._make_indexed_df()
+        result = filter_by_membership(df, sp)
+        assert result.loc[("AAPL", pd.Timestamp("2003-01-01")), "value"] == 1
