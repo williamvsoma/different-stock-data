@@ -437,6 +437,8 @@ def build_features(
         "risk_adj_return",
     }
     feature_cols_all = [c for c in risk_model_df.columns if c not in target_cols]
+    rank_cols = [c for c in feature_cols_all if c.endswith("_rank")]
+    raw_feature_cols = [c for c in feature_cols_all if not c.endswith("_rank")]
 
-    print(f"  Features: {len(feature_cols_all)} | Rows: {len(risk_model_df)}")
-    return risk_model_df, feature_cols_all
+    print(f"  Features: {len(feature_cols_all)} ({len(raw_feature_cols)} raw + {len(rank_cols)} rank) | Rows: {len(risk_model_df)}")
+    return risk_model_df, feature_cols_all, raw_feature_cols, rank_cols

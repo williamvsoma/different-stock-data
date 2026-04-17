@@ -57,11 +57,20 @@ def _select_features(Xtr, ytr, threshold=0.3):
     return f_scores.nlargest(n_keep).index.tolist()
 
 
-def walk_forward(risk_model_df, feature_cols_all, close_prices):
+def walk_forward(risk_model_df, feature_cols_all, close_prices, raw_feature_cols=None, rank_cols=None):
     """Run the production walk-forward engine.
 
     Returns ``(prod_df, prod_fi, prod_weights_history)``.
     """
+    # Derive model-specific feature sets
+    if raw_feature_cols is None:
+        raw_feature_cols = [c for c in feature_cols_all if not c.endswith("_rank")]
+    if rank_cols is None:
+        rank_cols = [c for c in feature_cols_all if c.endswith("_rank")]
+    # Trees get raw features only; Ridge gets rank features only
+    tree_cols = raw_feature_cols
+    ridge_cols = rank_cols if rank_cols else raw_feature_cols
+
     X_p = risk_model_df[feature_cols_all].copy()
     y_ret = risk_model_df["next_q_return"].copy()
     y_vol = risk_model_df["realized_vol"].copy()
@@ -101,30 +110,41 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         if len(Xtr) < cfg["min_train_rows"] or len(Xte) < cfg["min_test_stocks"]:
             continue
 
-        # ── Feature selection for high-dimensionality regimes ──
-        sel_cols = _select_features(Xtr, ytr_r, cfg["feat_ratio_threshold"])
+        # ── Feature selection per model type ──
+        avail_tree = [c for c in tree_cols if c in Xtr.columns]
+        avail_ridge = [c for c in ridge_cols if c in Xtr.columns]
+        sel_tree = _select_features(Xtr[avail_tree], ytr_r, cfg["feat_ratio_threshold"])
+        sel_ridge = _select_features(Xtr[avail_ridge], ytr_r, cfg["feat_ratio_threshold"])
+
+        # Keep full feature set for FI / vol model
+        sel_cols = sorted(set(sel_tree) | set(sel_ridge))
         Xtr_sel = Xtr[sel_cols]
         Xte_sel = Xte[sel_cols]
 
-        # ── Ensemble return predictions ──
+        # ── Ensemble return predictions (model-specific features) ──
+        # XGBoost: raw features only
         xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
-        xgb_m.fit(Xtr_sel, ytr_r, verbose=0)
-        p_xgb = xgb_m.predict(Xte_sel)
+        xgb_m.fit(Xtr[sel_tree], ytr_r, verbose=0)
+        p_xgb = xgb_m.predict(Xte[sel_tree])
 
-        imp = SimpleImputer(strategy="median")
-        Xtr_imp = imp.fit_transform(Xtr_sel)
-        Xte_imp = imp.transform(Xte_sel)
-
+        # Ridge: rank features only (better conditioning, no outlier sensitivity)
+        imp_r = SimpleImputer(strategy="median")
+        Xtr_rdg = imp_r.fit_transform(Xtr[sel_ridge])
+        Xte_rdg = imp_r.transform(Xte[sel_ridge])
         sc = StandardScaler()
-        Xtr_s = sc.fit_transform(Xtr_imp)
-        Xte_s = sc.transform(Xte_imp)
+        Xtr_s = sc.fit_transform(Xtr_rdg)
+        Xte_s = sc.transform(Xte_rdg)
         ridge_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
         ridge_m.fit(Xtr_s, ytr_r)
         p_rdg = ridge_m.predict(Xte_s)
 
+        # RF: raw features only
+        imp_t = SimpleImputer(strategy="median")
+        Xtr_rf = imp_t.fit_transform(Xtr[sel_tree])
+        Xte_rf = imp_t.transform(Xte[sel_tree])
         rf_m = RandomForestRegressor(**RF_PARAMS)
-        rf_m.fit(Xtr_imp, ytr_r)
-        p_rf = rf_m.predict(Xte_imp)
+        rf_m.fit(Xtr_rf, ytr_r)
+        p_rf = rf_m.predict(Xte_rf)
 
         p_ens = ENS_W["xgb"] * p_xgb + ENS_W["ridge"] * p_rdg + ENS_W["rf"] * p_rf
         p_ret = shrink_to_mean(
@@ -133,7 +153,7 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         )
 
         fi_full = pd.Series(0.0, index=feature_cols_all)
-        fi_full[sel_cols] = xgb_m.feature_importances_
+        fi_full[sel_tree] = xgb_m.feature_importances_
         fi_list.append({
             "date": td,
             "fi": fi_full,

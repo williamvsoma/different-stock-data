@@ -120,7 +120,7 @@ def stage_features():
     returns_full = returns_df.merge(vol_df, on=["symbol", "date"], how="inner")
 
     # ── 5. Build features ──
-    risk_model_df, feature_cols = build_features(
+    risk_model_df, feature_cols, raw_feature_cols, rank_cols = build_features(
         features_raw, bs_raw, cf_raw, annual_raw,
         close_prices, macro_df, returns_df, returns_full,
     )
@@ -136,6 +136,10 @@ def stage_features():
     risk_model_df.to_parquet(PROCESSED / "risk_model_df.parquet")
     with open(PROCESSED / "feature_cols.pkl", "wb") as f:
         pickle.dump(feature_cols, f)
+    with open(PROCESSED / "raw_feature_cols.pkl", "wb") as f:
+        pickle.dump(raw_feature_cols, f)
+    with open(PROCESSED / "rank_cols.pkl", "wb") as f:
+        pickle.dump(rank_cols, f)
     print(f"  Processed data saved to {PROCESSED}/")
 
 
@@ -148,11 +152,22 @@ def stage_train():
     risk_model_df = pd.read_parquet(PROCESSED / "risk_model_df.parquet")
     with open(PROCESSED / "feature_cols.pkl", "rb") as f:
         feature_cols = pickle.load(f)
+    raw_feature_cols = None
+    rank_cols = None
+    raw_path = PROCESSED / "raw_feature_cols.pkl"
+    rank_path = PROCESSED / "rank_cols.pkl"
+    if raw_path.exists():
+        with open(raw_path, "rb") as f:
+            raw_feature_cols = pickle.load(f)
+    if rank_path.exists():
+        with open(rank_path, "rb") as f:
+            rank_cols = pickle.load(f)
     close_prices = pd.read_parquet(INTERIM / "close_prices.parquet")
 
     # ── 6. Walk-forward backtest ──
     prod_df, prod_fi, weights_history = walk_forward(
         risk_model_df, feature_cols, close_prices,
+        raw_feature_cols=raw_feature_cols, rank_cols=rank_cols,
     )
     summarize_walk_forward(prod_df, prod_fi, feature_cols)
 
