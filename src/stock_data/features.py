@@ -227,8 +227,9 @@ def momentum_features(features_raw, close_prices) -> pd.DataFrame:
     """Price momentum and short-term volatility."""
     records = []
     for symbol, q_date in features_raw.index.tolist():
+        decision_date = q_date + pd.Timedelta(days=EARNINGS_LAG_DAYS)
         sp = close_prices[
-            (close_prices["symbol"] == symbol) & (close_prices["date"] <= q_date)
+            (close_prices["symbol"] == symbol) & (close_prices["date"] <= decision_date)
         ].sort_values("date")
         if len(sp) < 5:
             records.append({"symbol": symbol, "date": q_date})
@@ -237,13 +238,13 @@ def momentum_features(features_raw, close_prices) -> pd.DataFrame:
         rec = {"symbol": symbol, "date": q_date}
         for label, days in [("momentum_1m", 35), ("momentum_3m", 95),
                             ("momentum_6m", 185), ("momentum_12m", 370)]:
-            window = sp[sp["date"] >= q_date - pd.Timedelta(days=days)]
+            window = sp[sp["date"] >= decision_date - pd.Timedelta(days=days)]
             if len(window) > 0:
                 rec[label] = last_px / window["close"].iloc[0] - 1
-        m1 = sp[sp["date"] >= q_date - pd.Timedelta(days=35)]
+        m1 = sp[sp["date"] >= decision_date - pd.Timedelta(days=35)]
         if len(m1) > 5:
             rec["volatility_1m"] = m1["close"].pct_change().dropna().std()
-        m3 = sp[sp["date"] >= q_date - pd.Timedelta(days=95)]
+        m3 = sp[sp["date"] >= decision_date - pd.Timedelta(days=95)]
         if len(m3) > 10:
             rec["volatility_3m"] = m3["close"].pct_change().dropna().std()
         if rec.get("momentum_1m") and rec.get("volatility_1m", 0) > 0:
@@ -262,11 +263,12 @@ def macro_features(features_raw, macro_df) -> pd.DataFrame:
     cache = {}
     records = []
     for symbol, q_date in features_raw.index:
-        if q_date not in cache:
-            lookback = macro_df[macro_df.index <= q_date]
-            cache[q_date] = lookback.iloc[-1].to_dict() if len(lookback) > 0 else {}
+        decision_date = q_date + pd.Timedelta(days=EARNINGS_LAG_DAYS)
+        if decision_date not in cache:
+            lookback = macro_df[macro_df.index <= decision_date]
+            cache[decision_date] = lookback.iloc[-1].to_dict() if len(lookback) > 0 else {}
         rec = {"symbol": symbol, "date": q_date}
-        rec.update(cache[q_date])
+        rec.update(cache[decision_date])
         records.append(rec)
     return pd.DataFrame(records).set_index(["symbol", "date"])
 

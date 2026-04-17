@@ -217,7 +217,7 @@ def compute_forward_returns(close_prices, sym_date_pairs) -> pd.DataFrame:
             buy_date = q_date + pd.Timedelta(days=EARNINGS_LAG_DAYS)
             sell_date = buy_date + pd.DateOffset(months=3)
             buy_w = grp.loc[
-                buy_date - pd.Timedelta(days=5):buy_date + pd.Timedelta(days=5), "close"
+                buy_date:buy_date + pd.Timedelta(days=10), "close"
             ]
             sell_w = grp.loc[
                 sell_date - pd.Timedelta(days=5):sell_date + pd.Timedelta(days=5), "close"
