@@ -41,6 +41,23 @@ XGB_PARAMS = {
     "random_state": 42,
 }
 
+# Vol model gets deeper trees + less regularization (vol is more predictable)
+XGB_VOL_PARAMS = {
+    "n_estimators": 300,
+    "max_depth": 5,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.7,
+    "min_child_weight": 5,
+    "reg_alpha": 0.5,
+    "reg_lambda": 2.0,
+    "tree_method": "hist",
+    "random_state": 42,
+}
+
+VOL_FLOOR = 0.05  # minimum annualised vol (was hardcoded)
+VOL_RC_GATE = 0.10  # below this RC, fall back to hist_vol_3m
+
 RIDGE_PARAMS: dict[str, float] = {"alpha": 10.0}
 
 RF_PARAMS = {
