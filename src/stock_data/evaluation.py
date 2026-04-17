@@ -425,7 +425,7 @@ def run_iteration_analysis(
                 X_te_n = sc.transform(X_p.loc[te_m, stable_feat].fillna(0))
                 xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
                 xgb_m.fit(X_tr_n, y_ret_p[tr_m], verbose=0)
-                rdg_m = Ridge(**RIDGE_PARAMS)
+                rdg_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
                 rdg_m.fit(X_tr_n, y_ret_p[tr_m])
                 rf_m = RandomForestRegressor(**RF_PARAMS)
                 rf_m.fit(X_tr_n, y_ret_p[tr_m])

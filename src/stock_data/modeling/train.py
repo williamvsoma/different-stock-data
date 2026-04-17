@@ -73,7 +73,7 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         sc = StandardScaler()
         Xtr_s = sc.fit_transform(Xtr.fillna(0))
         Xte_s = sc.transform(Xte.fillna(0))
-        ridge_m = Ridge(**RIDGE_PARAMS)
+        ridge_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
         ridge_m.fit(Xtr_s, ytr_r)
         p_rdg = ridge_m.predict(Xte_s)
 
