@@ -11,16 +11,30 @@ Track all experiments run against the strategy. Record hypothesis, method, resul
 
 **Issue:** [#21](https://github.com/williamvsoma/different-stock-data/issues/21)
 **Agent:** `senior-data-scientist`
-**Status:** 🔲 Not started
-**Depends on:** ⛔ #17, #18
+**Status:** ❌ Rejected (no improvement)
+**Run date:** 2025-07-22 | **Test quarters:** 2 | **Script:** `experiments/run_experiments.py`
 
 | Detail | Value |
 |---|---|
 | **Hypothesis** | XGBoost 50% weight is arbitrary; Ridge may deserve more weight given noise level |
-| **Method** | (a) Equal-weight 1/3 each (b) Inverse-variance from prior quarter IC (c) Stacking meta-learner (d) Solo model ablation |
-| **Metric** | Ensemble rank correlation, net Sharpe, turnover, max drawdown |
-| **Result** | — |
-| **Decision** | — |
+| **Method** | Walk-forward with (a) baseline 50/25/25 (b) equal 1/3 each (c) adaptive weights from OOS RC (lookback=4, floor=0.10) (d) Ridge-heavy 25/50/25 |
+| **Metric** | Ensemble rank correlation, avg quarterly excess return (net), annualised Sharpe, IR |
+| **Result** | See table below |
+| **Decision** | **REJECT** — all alternatives underperform baseline on returns, Sharpe, and IR |
+
+| Variant | Excess Net | Ens RC | Sharpe | IR |
+|---|---|---|---|---|
+| Baseline (50/25/25) | **+6.49%** | 0.147 | **96.1** | **10.1** |
+| Equal (33/33/33) | +5.71% | 0.138 | 72.7 | 9.4 |
+| Adaptive (OOS RC) | +5.74% | **0.157** | 35.2 | 4.9 |
+| Ridge-heavy (25/50/25) | +3.60% | 0.120 | 43.1 | 6.8 |
+
+**Key findings:**
+
+- Adaptive weights improve ensemble RC by +0.01 but reduce excess returns by ~75bps and Sharpe by 63%
+- Ridge is consistently weakest (RC=0.071). Its 25% weight contributes diversification alpha despite low IC.
+- Only 2 test quarters — revisit when dataset grows to 8+ quarters.
+- Adaptive weights had insufficient training signal (only 1 prior quarter of RCs before adaptation kicks in).
 
 ---
 
@@ -45,15 +59,30 @@ Track all experiments run against the strategy. Record hypothesis, method, resul
 
 **Issue:** [#34](https://github.com/williamvsoma/different-stock-data/issues/34)
 **Agent:** `senior-data-scientist`
-**Status:** 🔲 Not started
+**Status:** ❌ Rejected (no improvement)
+**Run date:** 2025-07-22 | **Test quarters:** 2 | **Script:** `experiments/run_experiments.py`
 
 | Detail | Value |
 |---|---|
 | **Hypothesis** | Rank features are redundant for tree models; removing them halves dimensionality with no signal loss |
-| **Method** | Walk-forward with (a) all features (b) raw only (c) ranks only. Per-model and ensemble comparison. |
-| **Metric** | Per-model RC, ensemble RC, net Sharpe |
-| **Result** | — |
-| **Decision** | — |
+| **Method** | Walk-forward with (a) all features (b) model-specific: raw→trees, rank→Ridge (c) raw only (d) rank only |
+| **Metric** | Per-model RC, ensemble RC, avg quarterly excess return (net), Sharpe |
+| **Result** | See table below |
+| **Decision** | **REJECT** — baseline (all features for all models) wins on returns and ensemble RC |
+
+| Variant | Excess Net | Ens RC | XGB RC | Ridge RC | RF RC |
+|---|---|---|---|---|---|
+| Baseline (all) | **+6.49%** | **0.147** | **0.164** | 0.071 | 0.169 |
+| Model-specific | +5.96% | 0.125 | 0.153 | 0.014 | **0.184** |
+| Raw only | +4.67% | 0.147 | 0.153 | **0.088** | **0.184** |
+| Rank only | +2.92% | 0.119 | 0.139 | 0.014 | 0.158 |
+
+**Key findings:**
+
+- Hypothesis is **half-right**: RF improves with raw-only (0.169→0.184), confirming trees don't need rank features
+- But Ridge **collapses** on rank-only features (RC 0.071→0.014). Ranks remove scale/magnitude info Ridge relies on.
+- XGB *benefits* from rank features (0.164 vs 0.153 raw-only) — unexpected. Ranks provide useful cross-sectional normalisation even for trees.
+- The "give everything to everyone" approach produces the best ensemble. Feature redundancy is a feature, not a bug.
 
 ---
 
@@ -61,15 +90,30 @@ Track all experiments run against the strategy. Record hypothesis, method, resul
 
 **Issue:** [#32](https://github.com/williamvsoma/different-stock-data/issues/32)
 **Agent:** `senior-data-scientist`
-**Status:** 🔲 Not started
+**Status:** ❌ Rejected (no improvement)
+**Run date:** 2025-07-22 | **Test quarters:** 2 | **Script:** `experiments/run_experiments.py`
 
 | Detail | Value |
 |---|---|
 | **Hypothesis** | Historical vol may match or beat ML vol prediction; vol model doesn't need XGBoost |
-| **Method** | (a) Separate vol model hyperparams (depth 5-7) (b) Naive `hist_vol_3m` as prediction (c) GARCH(1,1) baseline (d) Quality gate: fallback to historical if vol_rc < 0.2 |
-| **Metric** | Vol rank correlation, portfolio Sharpe (since vol feeds into optimizer) |
-| **Result** | — |
-| **Decision** | — |
+| **Method** | (a) Separate vol hyperparams (depth=5, less reg) (b) Same + quality gate (fall back to hist_vol_3m when vol_rc < 0.10) |
+| **Metric** | Vol rank correlation, portfolio excess return, Sharpe |
+| **Result** | See table below |
+| **Decision** | **REJECT** — deeper vol model worsens vol_rc; quality gate worsens further; zero impact on returns |
+
+| Variant | Vol RC | Excess Net | Sharpe | IR |
+|---|---|---|---|---|
+| Baseline (XGB depth=3) | **0.793** | +6.49% | 96.1 | 10.1 |
+| Deeper (depth=5, less reg) | 0.790 | +6.49% | 96.1 | 10.1 |
+| Deeper + gate | 0.752 | +6.49% | 96.1 | 10.1 |
+
+**Key findings:**
+
+- Returns are **completely identical** across all vol variants — MV optimizer produces same portfolios regardless of small vol differences
+- Baseline vol model (depth=3) already excellent at RC=0.793. Deeper trees overfit on small training set.
+- Quality gate fires and falls back to hist_vol_3m, which has *worse* correlation (0.752). ML vol model is already better than naive.
+- GARCH baseline was not tested (insufficient data for reliable GARCH estimation with quarterly frequency).
+- The vol model is "good enough" — improvements to vol prediction don't propagate to portfolio returns at current scale.
 
 ---
 
@@ -177,4 +221,6 @@ Track all experiments run against the strategy. Record hypothesis, method, resul
 
 ## Completed Experiments
 
-_None yet._
+- **EXP-01**: Ensemble Weight Optimization — ❌ Rejected (2025-07-22)
+- **EXP-03**: Rank Feature Ablation — ❌ Rejected (2025-07-22)
+- **EXP-04**: Volatility Model Benchmark — ❌ Rejected (2025-07-22)
