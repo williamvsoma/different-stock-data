@@ -1,0 +1,66 @@
+site_name: S&P 500 Stock Selection Strategy
+site_description: ML-enhanced quarterly stock selection on S&P 500 constituents
+repo_url: ""
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - toc.follow
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            heading_level: 3
+            members_order: source
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Strategy Overview: strategy.md
+  - Pipeline: pipeline.md
+  - API Reference:
+      - Configuration: api/config.md
+      - Dataset: api/dataset.md
+      - Features: api/features.md
+      - Evaluation: api/evaluation.md
+      - Plots: api/plots.md
+      - Modeling:
+          - Training: api/modeling/train.md
+          - Prediction: api/modeling/predict.md
+  - Notebooks: notebooks.md

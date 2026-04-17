@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Data artifacts (keep raw, ignore generated)
+data/interim/*
+data/processed/*
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+
+# Model outputs
+models/*
+!models/.gitkeep
+
+# Report outputs (HTML exports, generated figures)
+reports/*.html
+reports/figures/*
+!reports/figures/.gitkeep
