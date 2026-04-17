@@ -54,20 +54,26 @@ def filter_by_membership(df: pd.DataFrame, sp500_df: pd.DataFrame) -> pd.DataFra
 # ── Financial statements ───────────────────────────────────────────────────────
 
 
-def _fetch_statements(symbols, accessor, label, sleep_every=50):
+def _fetch_statements(symbols, accessor, label, sleep_every=50, max_retries=2):
     """Generic fetcher for quarterly/annual yfinance statement attributes."""
     data = {}
     failed = []
     t0 = time.time()
     for i, symbol in enumerate(symbols):
-        try:
-            ticker = yf.Ticker(symbol)
-            stmt = getattr(ticker, accessor)
-            if stmt is not None and not stmt.empty:
-                data[symbol] = stmt
-        except (requests.exceptions.RequestException, KeyError, ValueError) as e:
-            failed.append((symbol, str(e)))
-            logger.warning("Failed to fetch %s for %s: %s", label, symbol, e)
+        for attempt in range(1, max_retries + 1):
+            try:
+                ticker = yf.Ticker(symbol)
+                stmt = getattr(ticker, accessor)
+                if stmt is not None and not stmt.empty:
+                    data[symbol] = stmt
+                break
+            except (requests.exceptions.RequestException, KeyError, ValueError) as e:
+                if attempt == max_retries:
+                    failed.append((symbol, str(e)))
+                    logger.warning("Failed to fetch %s for %s after %d attempts: %s",
+                                   label, symbol, max_retries, e)
+                else:
+                    time.sleep(2 ** attempt)
         if (i + 1) % sleep_every == 0:
             print(f"  {label}: {i + 1}/{len(symbols)}...")
             time.sleep(1)
@@ -285,3 +291,26 @@ def compute_realized_vol(returns_df, close_prices) -> pd.DataFrame:
             "realized_kurtosis": dr.kurtosis(),
         })
     return pd.DataFrame(records)
+
+
+# ── Data quality checks ───────────────────────────────────────────────────────
+
+
+def validate_data_quality(wide_df, expected_min_quarters=4):
+    """Flag symbols with fewer quarters than expected.
+
+    Returns a DataFrame with per-symbol quarter count and a warning flag.
+    Prints a summary of flagged symbols.
+    """
+    counts = wide_df.groupby(level="symbol").size().rename("n_quarters")
+    quality = counts.to_frame()
+    quality["flagged"] = quality["n_quarters"] < expected_min_quarters
+    n_flagged = quality["flagged"].sum()
+    n_total = len(quality)
+    print(f"  Data quality: {n_total} symbols, "
+          f"{n_flagged} with <{expected_min_quarters} quarters")
+    if n_flagged > 0:
+        flagged_syms = quality[quality["flagged"]].index.tolist()
+        print(f"    Flagged: {flagged_syms[:20]}"
+              + (f" ... (+{n_flagged - 20} more)" if n_flagged > 20 else ""))
+    return quality
