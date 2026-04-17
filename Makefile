@@ -26,6 +26,14 @@ reports:
 		notebooks/reports/3.0-wvs-backtest-results.ipynb \
 		notebooks/reports/4.0-wvs-strategy-evaluation.ipynb
 
+## Build documentation site
+docs:
+	uv run mkdocs build
+
+## Serve documentation locally
+docs-serve:
+	uv run mkdocs serve
+
 ## Delete compiled Python files and cached data
 clean:
 	find . -type f -name "*.py[co]" -delete
