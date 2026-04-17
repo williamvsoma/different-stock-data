@@ -54,6 +54,7 @@ nav:
   - Getting Started: getting-started.md
   - Strategy Overview: strategy.md
   - Pipeline: pipeline.md
+  - Experiments: experiments.md
   - API Reference:
       - Configuration: api/config.md
       - Dataset: api/dataset.md
