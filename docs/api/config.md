@@ -14,6 +14,7 @@ Project-wide constants and hyperparameters.
 | Parameter | Value | Description |
 |---|---|---|
 | `EARNINGS_LAG_DAYS` | 45 | Days after quarter-end before trading (conservative reporting window) |
+| `ANNUAL_FILING_LAG` | 90 | Days after fiscal year end before annual data is assumed public |
 | `MACRO_TICKERS` | VIX, TNX, IRX, GSPC | Macro indicators downloaded from yfinance |
 
 ### Walk-Forward Engine

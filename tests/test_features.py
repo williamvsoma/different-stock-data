@@ -611,3 +611,42 @@ class TestAnnualGrowthFeatures:
         )
         result = annual_growth_features(feat, annual_raw)
         assert "annual_rev_growth" in result.columns
+
+    def test_filing_lag_prevents_premature_mapping(self):
+        """Annual data with FY-end 2023-12-31 should not map to a quarterly
+        date before the 90-day filing lag elapses (2024-03-31)."""
+        from stock_data.config import ANNUAL_FILING_LAG
+
+        symbols = ["A"]
+        # Two annual periods: FY 2022 and FY 2023
+        a_dates = [pd.Timestamp("2022-12-31"), pd.Timestamp("2023-12-31")]
+        a_idx = _make_index(symbols, a_dates)
+        annual_raw = pd.DataFrame(
+            {"Total Revenue": [100.0, 120.0],
+             "Net Income": [10.0, 15.0],
+             "EBITDA": [30.0, 40.0]},
+            index=a_idx,
+        )
+
+        # Query date is 1 day before the lag-shifted FY2023 date.
+        # FY2023-12-31 + 90d = 2024-03-31; query at 2024-03-30 → too early.
+        # merge_asof falls back to lag-shifted FY2022 (2023-03-31), whose
+        # growth is NaN (first row of pct_change).
+        early_date = pd.Timestamp("2023-12-31") + pd.Timedelta(days=ANNUAL_FILING_LAG - 1)
+        idx_early = _make_index(symbols, [early_date])
+        feat_early = pd.DataFrame({"gross_margin": [0.3]}, index=idx_early)
+
+        result_early = annual_growth_features(feat_early, annual_raw)
+        if "annual_rev_growth" in result_early.columns:
+            assert pd.isna(result_early["annual_rev_growth"].iloc[0])
+
+        # Query date is exactly at the lag boundary → FY2023 should be available
+        lag_date = pd.Timestamp("2023-12-31") + pd.Timedelta(days=ANNUAL_FILING_LAG)
+        idx_lag = _make_index(symbols, [lag_date])
+        feat_lag = pd.DataFrame({"gross_margin": [0.3]}, index=idx_lag)
+
+        result_lag = annual_growth_features(feat_lag, annual_raw)
+        assert "annual_rev_growth" in result_lag.columns
+        val_lag = result_lag["annual_rev_growth"].iloc[0]
+        assert not pd.isna(val_lag)
+        assert abs(val_lag - 0.20) < 1e-9
