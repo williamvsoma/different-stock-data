@@ -128,9 +128,12 @@ def evaluate_factors(prod_df, factor_results, n_boot=N_BOOT):
 
     # Final assessment
     ann_excess_net = (1 + ex_n.mean())**4 - 1
-    net_sharpe = (ex_n.mean() / ex_n.std() * 2) if ex_n.std() > 0 else 0
+    net_ir = (ex_n.mean() / ex_n.std() * np.sqrt(4)) if ex_n.std() > 0 else 0
+    net_sharpe = (prod_df["net_ret"].mean() / prod_df["net_ret"].std() * np.sqrt(4)) if prod_df["net_ret"].std() > 0 else 0
     wealth_net = (1 + prod_df["net_ret"]).cumprod()
     max_dd = ((wealth_net / wealth_net.cummax()) - 1).min()
+    ann_ret_net = (1 + prod_df["net_ret"].mean())**4 - 1
+    calmar = ann_ret_net / abs(max_dd) if max_dd != 0 else 0
 
     if len(ex_n) >= 3:
         t_stat, p_val = stats.ttest_1samp(ex_n, 0)
@@ -142,7 +145,9 @@ def evaluate_factors(prod_df, factor_results, n_boot=N_BOOT):
     print(f"{'='*80}")
     print(f"""
   Annualized excess:     {ann_excess_net:+.1%}
-  Annualized Sharpe:     {net_sharpe:.2f}
+  Sharpe (ann):          {net_sharpe:.2f}
+  Information ratio:     {net_ir:.2f}
+  Calmar ratio:          {calmar:.2f}
   Win rate vs market:    {(ex_n > 0).sum()}/{len(prod_df)} ({(ex_n > 0).mean():.0%})
   Max drawdown:          {max_dd:+.2%}
   t-statistic:           {t_stat:.2f}
@@ -366,9 +371,22 @@ def print_simulation_summary(sim_df, mkt_sim, initial_capital):
     n_days = len(combined)
     n_years = n_days / 252
     port_daily_ret = combined["portfolio_value"].pct_change().dropna()
+    mkt_daily_ret = combined["market_value"].pct_change().dropna()
     port_ann_ret = (final_port / initial_capital) ** (1 / max(n_years, 0.1)) - 1
     mkt_ann_ret = (final_mkt / initial_capital) ** (1 / max(n_years, 0.1)) - 1
     port_ann_vol = port_daily_ret.std() * np.sqrt(252)
+
+    # Information ratio (excess return / tracking error, annualized)
+    excess_daily = port_daily_ret - mkt_daily_ret
+    tracking_error = excess_daily.std() * np.sqrt(252)
+    ir = (excess_daily.mean() * 252) / tracking_error if tracking_error > 0 else 0
+
+    # Max drawdown from daily simulation
+    cum_ret = (1 + port_daily_ret).cumprod()
+    max_dd = ((cum_ret / cum_ret.cummax()) - 1).min()
+
+    # Calmar ratio (annualized return / abs(max drawdown))
+    calmar = port_ann_ret / abs(max_dd) if max_dd != 0 else 0
 
     print(f"\n{'='*80}")
     print(f"SIMULATION RESULTS")
@@ -377,7 +395,10 @@ def print_simulation_summary(sim_df, mkt_sim, initial_capital):
     print(f"  Ann return:   {port_ann_ret:>11.2%} (strategy)  {mkt_ann_ret:>11.2%} (market)")
     print(f"  Ann vol:      {port_ann_vol:>11.2%}")
     if port_ann_vol > 0:
-        print(f"  Sharpe:       {port_ann_ret / port_ann_vol:.2f}")
+        print(f"  Sharpe:       {port_ann_ret / port_ann_vol:>11.2f}")
+    print(f"  Info ratio:   {ir:>11.2f}")
+    print(f"  Max drawdown: {max_dd:>11.2%}")
+    print(f"  Calmar:       {calmar:>11.2f}")
 
 
 # ── Iteration analysis ─────────────────────────────────────────────────────────
