@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from stock_data.config import EARNINGS_LAG_DAYS
+from stock_data.config import ANNUAL_FILING_LAG, EARNINGS_LAG_DAYS
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -172,6 +172,7 @@ def annual_growth_features(feat, annual_raw) -> pd.DataFrame:
         "annual_ebitda_growth": ann_ebitda_g,
     }).reset_index()
     ann_growth["date"] = pd.to_datetime(ann_growth["date"])
+    ann_growth["date"] = ann_growth["date"] + pd.Timedelta(days=ANNUAL_FILING_LAG)
 
     feat_reset = feat.reset_index()
     feat_reset["date"] = pd.to_datetime(feat_reset["date"])

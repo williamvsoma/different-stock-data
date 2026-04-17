@@ -3,6 +3,7 @@
 # ── Data acquisition ───────────────────────────────────────────────────────────
 
 EARNINGS_LAG_DAYS = 45  # conservative: most S&P 500 firms report within 40 days
+ANNUAL_FILING_LAG = 90  # annual reports filed 60-90 days after fiscal year end
 
 MACRO_TICKERS = {
     "^VIX": "vix",
