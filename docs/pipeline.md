@@ -17,9 +17,9 @@ graph LR
 
 ## 1. Load Universe
 
-Load S&P 500 membership from `data/raw/sp500_monthly.csv`. Only currently active constituents are used.
+Load the full S&P 500 membership table from `data/raw/sp500_monthly.csv`, including both current and historical constituents. The table contains `date_added` and `date_removed` columns that track when each symbol entered and left the index. All historical members are included so that the data download covers the complete survivorship-bias-free universe.
 
-**Output**: List of ~500 ticker symbols.
+**Output**: Full membership DataFrame (~1000 entries covering ~940 unique symbols), plus list of all unique ticker symbols for data download.
 
 ## 2. Fetch Financial Statements
 
@@ -62,6 +62,8 @@ For each `(symbol, date)` pair with financial data:
 
 Engineer ~180 features across multiple categories (see [Strategy Overview](strategy.md#features-180-total)). The feature matrix is indexed by `(symbol, date)` and includes all features plus forward return and volatility targets.
 
+After building features, a **point-in-time membership filter** removes any `(symbol, date)` rows where the symbol was not in the S&P 500 at that date. This eliminates survivorship bias by ensuring the backtest universe at each quarter matches the actual index composition at that time.
+
 **Output**: `data/processed/risk_model_df.parquet`, `data/processed/feature_cols.pkl`
 
 ## 6. Walk-Forward Backtest
@@ -95,13 +97,13 @@ Generate diagnostic plots and run additional analysis:
 ## Data Flow
 
 ```
-data/raw/sp500_monthly.csv     (immutable input)
+data/raw/sp500_monthly.csv     (immutable input — full membership history)
         │
         ▼
-data/interim/                  (parquet: raw financials, prices, macro)
+data/interim/                  (parquet: raw financials, prices, macro, membership)
         │
         ▼
-data/processed/                (feature matrix + feature column list)
+data/processed/                (feature matrix filtered by point-in-time membership)
         │
         ▼
 models/                        (backtest results, weights, factor benchmarks)
