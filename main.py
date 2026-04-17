@@ -109,7 +109,7 @@ def stage_features():
     macro_df = pd.read_parquet(INTERIM / "macro_df.parquet")
 
     # ── 4. Forward returns & vol ──
-    sym_date_pairs = features_raw.index.droplevel("item").unique()
+    sym_date_pairs = features_raw.index
     returns_df = compute_forward_returns(close_prices, sym_date_pairs)
     returns_df["return_quantile"] = returns_df.groupby("date")["next_q_return"].rank(pct=True)
 
