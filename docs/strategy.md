@@ -85,3 +85,37 @@ Strategy performance is compared against four single-factor portfolios:
 ### Bootstrap Confidence Intervals
 
 10,000 bootstrap resamples of quarterly excess returns produce a 95% confidence interval and the probability that true excess return is ≤ 0.
+
+## Data Quality and Known Limitations
+
+### Restatement Bias
+
+yfinance is the sole data source for financial statements. yfinance returns the
+**latest revised version** of each filing, not the original as-filed version.
+If a company restates Q3 numbers after the fact, the backtest sees the restated
+values — but at decision time, only the original filing was available.
+
+**Impact:** Restatement bias typically *helps* the backtest (corrections tend to
+improve reported numbers), so model quality may be overstated.
+
+### Point-in-Time Data
+
+There is no as-filed timestamp from yfinance. The 45-day `EARNINGS_LAG_DAYS` in
+`config.py` is a heuristic that works for ~80% of S&P 500 large accelerated
+filers, but some companies file in 30 days while others take 60+.
+
+### Field Name Instability
+
+yfinance periodically changes field names across versions (e.g., "Operating
+Revenue" vs "Total Revenue"). The `gcol()` defensive accessor in `features.py`
+handles missing columns gracefully, but silent data loss is possible.
+
+### Mitigation
+
+1. `validate_data_quality()` in `dataset.py` flags symbols with fewer quarters
+   than expected — a proxy for download failures or field-name changes.
+2. `_fetch_statements()` retries failed symbols up to 2 times with exponential
+   backoff to reduce rate-limit-related data loss.
+3. **Medium-term:** Cross-validate key results against SEC EDGAR XBRL filings.
+4. **Long-term:** Consider SimFin, Sharadar, or WRDS/Compustat for
+   point-in-time fundamentals.

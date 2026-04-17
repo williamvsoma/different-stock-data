@@ -12,6 +12,7 @@ from stock_data.dataset import (
     pivot_statements,
     reshape_annual_income,
     reshape_statements,
+    validate_data_quality,
 )
 
 
@@ -334,3 +335,43 @@ class TestFilterByMembership:
         df = self._make_indexed_df()
         result = filter_by_membership(df, sp)
         assert result.loc[("AAPL", pd.Timestamp("2003-01-01")), "value"] == 1
+
+
+# ── validate_data_quality ─────────────────────────────────────────────────────
+
+
+class TestValidateDataQuality:
+    def _make_wide_df(self, n_quarters_per_sym):
+        """Build a wide (symbol, date) DataFrame with variable quarter counts."""
+        frames = []
+        for sym, n_q in n_quarters_per_sym.items():
+            dates = pd.date_range("2022-01-01", periods=n_q, freq="QE")
+            idx = pd.MultiIndex.from_tuples(
+                [(sym, d) for d in dates], names=["symbol", "date"]
+            )
+            frames.append(pd.DataFrame({"value": 1.0}, index=idx))
+        return pd.concat(frames)
+
+    def test_no_flags_when_all_sufficient(self):
+        df = self._make_wide_df({"A": 8, "B": 6})
+        quality = validate_data_quality(df, expected_min_quarters=4)
+        assert quality["flagged"].sum() == 0
+
+    def test_flags_symbols_below_threshold(self):
+        df = self._make_wide_df({"A": 8, "B": 2, "C": 1})
+        quality = validate_data_quality(df, expected_min_quarters=4)
+        assert quality.loc["B", "flagged"]
+        assert quality.loc["C", "flagged"]
+        assert not quality.loc["A", "flagged"]
+
+    def test_returns_correct_counts(self):
+        df = self._make_wide_df({"X": 5, "Y": 3})
+        quality = validate_data_quality(df, expected_min_quarters=4)
+        assert quality.loc["X", "n_quarters"] == 5
+        assert quality.loc["Y", "n_quarters"] == 3
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame(columns=["value"])
+        df.index = pd.MultiIndex.from_tuples([], names=["symbol", "date"])
+        quality = validate_data_quality(df, expected_min_quarters=4)
+        assert len(quality) == 0

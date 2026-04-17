@@ -76,6 +76,13 @@ The strategy uses:
 - **Quarterly financials** (income, balance sheet, cash flow) via yfinance
 - **Daily prices** and **macro indicators** (VIX, Treasury yields) via yfinance
 
+> **⚠️ Data Quality Notice:** yfinance provides *restated* financial statements
+> without point-in-time tracking. This means backtest results use data that may
+> differ from what was available at the time of each historical decision. The
+> 45-day `EARNINGS_LAG_DAYS` guard mitigates timing bias but cannot address
+> restatement bias. See [docs/strategy.md](docs/strategy.md) for details and
+> mitigation plans.
+
 ## Strategy
 
 1. **Features**: ~180 features including profitability ratios, balance sheet metrics, cash flow ratios, YoY/QoQ growth, price momentum, macro indicators, risk features, and cross-sectional ranks.
