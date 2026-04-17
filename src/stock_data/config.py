@@ -54,6 +54,12 @@ RF_PARAMS = {
 
 ENS_W = {"xgb": 0.5, "ridge": 0.25, "rf": 0.25}
 
+# "fixed" uses ENS_W above; "adaptive" uses inverse-variance of recent OOS
+# rank correlations (lookback_q quarters). "equal" uses 1/3 each.
+ENS_WEIGHT_METHOD = "adaptive"
+ENS_ADAPTIVE_LOOKBACK_Q = 4  # quarters of OOS history for adaptive weights
+ENS_ADAPTIVE_FLOOR = 0.10  # minimum weight per model (prevents zero-ing out)
+
 # ── Simulation ─────────────────────────────────────────────────────────────────
 
 INITIAL_CAPITAL = 1_000_000

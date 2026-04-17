@@ -5,6 +5,7 @@ import pytest
 
 from stock_data.modeling.predict import (
     bootstrap_ci,
+    compute_adaptive_weights,
     mv_optimize,
     mv_optimize_diag,
     portfolio_turnover,
@@ -251,3 +252,58 @@ class TestSafeSpearmanr:
         b = np.arange(10, dtype=float)
         r = safe_spearmanr(a, b)
         assert np.isnan(r)
+
+
+# ── compute_adaptive_weights ───────────────────────────────────────────────────
+
+
+class TestComputeAdaptiveWeights:
+    def test_empty_history_returns_equal(self):
+        w = compute_adaptive_weights([])
+        assert w["xgb"] == pytest.approx(1 / 3, abs=1e-6)
+        assert w["ridge"] == pytest.approx(1 / 3, abs=1e-6)
+        assert w["rf"] == pytest.approx(1 / 3, abs=1e-6)
+
+    def test_weights_sum_to_one(self):
+        hist = [
+            {"xgb": 0.15, "ridge": 0.10, "rf": 0.08},
+            {"xgb": 0.12, "ridge": 0.11, "rf": 0.05},
+        ]
+        w = compute_adaptive_weights(hist)
+        assert sum(w.values()) == pytest.approx(1.0, abs=1e-6)
+
+    def test_dominant_model_gets_more_weight(self):
+        hist = [
+            {"xgb": 0.01, "ridge": 0.30, "rf": 0.02},
+            {"xgb": 0.02, "ridge": 0.25, "rf": 0.01},
+            {"xgb": 0.01, "ridge": 0.28, "rf": 0.03},
+        ]
+        w = compute_adaptive_weights(hist, floor=0.05)
+        assert w["ridge"] > w["xgb"]
+        assert w["ridge"] > w["rf"]
+
+    def test_floor_respected(self):
+        """After renorm, no weight should be below floor/sum_of_floored."""
+        hist = [
+            {"xgb": 0.50, "ridge": 0.01, "rf": 0.01},
+        ]
+        floor = 0.15
+        w = compute_adaptive_weights(hist, floor=floor)
+        # At minimum, a floored model gets floor/(floor + floor + dominant_raw)
+        # which is always > 0. Key property: weak models still get meaningful weight.
+        min_w = min(w.values())
+        assert min_w > 0.05  # not pushed to near-zero
+
+    def test_negative_rcs_treated_as_zero(self):
+        hist = [
+            {"xgb": -0.10, "ridge": -0.05, "rf": 0.10},
+        ]
+        w = compute_adaptive_weights(hist, floor=0.05)
+        # RF is only model with positive RC
+        assert w["rf"] > w["xgb"]
+        assert w["rf"] > w["ridge"]
+
+    def test_all_models_present(self):
+        hist = [{"xgb": 0.1, "ridge": 0.1, "rf": 0.1}]
+        w = compute_adaptive_weights(hist)
+        assert set(w.keys()) == {"xgb", "ridge", "rf"}

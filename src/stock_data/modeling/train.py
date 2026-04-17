@@ -11,6 +11,9 @@ from sklearn.preprocessing import StandardScaler
 
 from stock_data.config import (
     ENS_W,
+    ENS_WEIGHT_METHOD,
+    ENS_ADAPTIVE_LOOKBACK_Q,
+    ENS_ADAPTIVE_FLOOR,
     EARNINGS_LAG_DAYS,
     PROD_CFG,
     RF_PARAMS,
@@ -18,6 +21,7 @@ from stock_data.config import (
     XGB_PARAMS,
 )
 from stock_data.modeling.predict import (
+    compute_adaptive_weights,
     ledoit_wolf_cov,
     mv_optimize,
     mv_optimize_diag,
@@ -76,6 +80,7 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
     results = []
     fi_list = []
     weights_history = {}
+    rc_history = []  # per-model OOS rank correlations for adaptive weights
 
     cfg = PROD_CFG
 
@@ -126,7 +131,16 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         rf_m.fit(Xtr_imp, ytr_r)
         p_rf = rf_m.predict(Xte_imp)
 
-        p_ens = ENS_W["xgb"] * p_xgb + ENS_W["ridge"] * p_rdg + ENS_W["rf"] * p_rf
+        # ── Determine ensemble weights ──
+        if ENS_WEIGHT_METHOD == "adaptive":
+            recent = rc_history[-ENS_ADAPTIVE_LOOKBACK_Q:]
+            ew = compute_adaptive_weights(recent, floor=ENS_ADAPTIVE_FLOOR)
+        elif ENS_WEIGHT_METHOD == "equal":
+            ew = {"xgb": 1 / 3, "ridge": 1 / 3, "rf": 1 / 3}
+        else:  # "fixed"
+            ew = ENS_W
+
+        p_ens = ew["xgb"] * p_xgb + ew["ridge"] * p_rdg + ew["rf"] * p_rf
         p_ret = shrink_to_mean(
             winsorize(p_ens, cfg["winsor_pct"]),
             cfg["shrinkage_alpha"],
@@ -192,6 +206,9 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         rrc_r = safe_spearmanr(p_rdg, act_ret)
         rrc_f = safe_spearmanr(p_rf, act_ret)
         n_held = int((w > 0.001).sum())
+
+        # Track per-model OOS rank correlations for adaptive weighting
+        rc_history.append({"xgb": rrc_x, "ridge": rrc_r, "rf": rrc_f})
 
         results.append({
             "test_date": td, "n_train_q": len(tr_dates),
