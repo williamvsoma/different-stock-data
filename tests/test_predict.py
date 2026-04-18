@@ -251,3 +251,40 @@ class TestSafeSpearmanr:
         b = np.arange(10, dtype=float)
         r = safe_spearmanr(a, b)
         assert np.isnan(r)
+
+
+# ── mv_optimize_turnover ──────────────────────────────────────────────────────
+
+from stock_data.modeling.predict import mv_optimize_turnover
+
+
+class TestMvOptimizeTurnover:
+    def _simple_case(self, n=5, max_w=0.4):
+        rng = np.random.default_rng(42)
+        mu = rng.standard_normal(n)
+        A = rng.standard_normal((n, n))
+        cov = A.T @ A / n + np.eye(n) * 0.01
+        prev_w = np.ones(n) / n
+        return mu, cov, max_w, prev_w
+
+    def test_weights_sum_to_one(self):
+        mu, cov, max_w, prev_w = self._simple_case()
+        w = mv_optimize_turnover(mu, cov, max_w, lam=1.0, prev_w=prev_w, max_turnover=0.3)
+        assert w.sum() == pytest.approx(1.0, abs=1e-4)
+
+    def test_weights_non_negative(self):
+        mu, cov, max_w, prev_w = self._simple_case()
+        w = mv_optimize_turnover(mu, cov, max_w, lam=1.0, prev_w=prev_w, max_turnover=0.3)
+        assert (w >= -1e-6).all()
+
+    def test_turnover_respects_constraint(self):
+        mu, cov, max_w, prev_w = self._simple_case()
+        max_to = 0.2
+        w = mv_optimize_turnover(mu, cov, max_w, lam=1.0, prev_w=prev_w, max_turnover=max_to)
+        actual_to = np.abs(w - prev_w).sum() / 2
+        assert actual_to <= max_to + 1e-3
+
+    def test_none_prev_w_defaults_to_equal(self):
+        mu, cov, max_w, _ = self._simple_case()
+        w = mv_optimize_turnover(mu, cov, max_w, lam=1.0, prev_w=None, max_turnover=0.5)
+        assert w.sum() == pytest.approx(1.0, abs=1e-4)

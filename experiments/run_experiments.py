@@ -27,7 +27,7 @@ from stock_data.config import (
     ENS_W, EARNINGS_LAG_DAYS, PROD_CFG, XGB_PARAMS, RIDGE_PARAMS, RF_PARAMS,
 )
 from stock_data.modeling.predict import (
-    ledoit_wolf_cov, mv_optimize, mv_optimize_diag,
+    ledoit_wolf_cov, mv_optimize, mv_optimize_diag, mv_optimize_turnover,
     portfolio_turnover, safe_spearmanr, shrink_to_mean, winsorize,
 )
 from stock_data.modeling.train import _select_features
@@ -179,7 +179,17 @@ def run_walk_forward(
                 ci = {s: i for i, s in enumerate(cov_syms)}
                 kt = [ti[s] for s in both]
                 kc = [ci[s] for s in both]
-                w = mv_optimize(p_ret[kt], cov_mat[np.ix_(kc, kc)], cfg["max_weight"], cfg["risk_aversion"])
+                max_to = cfg.get("max_turnover")
+                if max_to and prev_w is not None:
+                    # Map prev weights to current symbols
+                    prev_map = dict(zip(prev_s, prev_w)) if prev_s else {}
+                    pw_aligned = np.array([prev_map.get(s, 0) for s in both])
+                    pw_aligned = pw_aligned / pw_aligned.sum() if pw_aligned.sum() > 0 else pw_aligned
+                    w = mv_optimize_turnover(p_ret[kt], cov_mat[np.ix_(kc, kc)],
+                                              cfg["max_weight"], cfg["risk_aversion"],
+                                              pw_aligned, max_to)
+                else:
+                    w = mv_optimize(p_ret[kt], cov_mat[np.ix_(kc, kc)], cfg["max_weight"], cfg["risk_aversion"])
                 port_ret = w @ act_ret[kt]
                 opt_syms = both
                 used_lw = True
@@ -415,6 +425,29 @@ def experiment_34_rank_only():
         tree_cols=rank_cols,
         ridge_feature_cols=rank_cols,
         label="rank_only",
+    )
+
+
+
+def experiment_24_turnover_constrained():
+    """Issue #24: Turnover-constrained MV optimizer (max_turnover=0.3)."""
+    print("\n>>> EXP #24a: Turnover-constrained MV (max_turnover=0.3)")
+    cfg = PROD_CFG.copy()
+    cfg["max_turnover"] = 0.3
+    return run_walk_forward(
+        risk_model_df, feature_cols_all, close_prices, cfg,
+        label="turnover_capped_30",
+    )
+
+
+def experiment_24_turnover_tight():
+    """Issue #24: Tight turnover constraint (max_turnover=0.15)."""
+    print("\n>>> EXP #24b: Tight turnover constraint (max_turnover=0.15)")
+    cfg = PROD_CFG.copy()
+    cfg["max_turnover"] = 0.15
+    return run_walk_forward(
+        risk_model_df, feature_cols_all, close_prices, cfg,
+        label="turnover_capped_15",
     )
 
 
