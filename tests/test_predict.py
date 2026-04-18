@@ -1,10 +1,12 @@
 """Unit tests for stock_data.modeling.predict."""
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from stock_data.modeling.predict import (
     bootstrap_ci,
+    compute_spx_return,
     mv_optimize,
     mv_optimize_diag,
     portfolio_turnover,
@@ -251,3 +253,38 @@ class TestSafeSpearmanr:
         b = np.arange(10, dtype=float)
         r = safe_spearmanr(a, b)
         assert np.isnan(r)
+
+
+# ── compute_spx_return ─────────────────────────────────────────────────────────
+
+
+class TestComputeSpxReturn:
+    def _make_close_prices(self):
+        dates = pd.bdate_range("2024-01-01", periods=65)
+        rows = []
+        for d in dates:
+            rows.append({"date": d, "symbol": "^GSPC", "close": 4000 + len(rows)})
+            rows.append({"date": d, "symbol": "AAPL", "close": 150 + len(rows) * 0.1})
+        return pd.DataFrame(rows)
+
+    def test_basic_return_calculation(self):
+        cp = self._make_close_prices()
+        buy = pd.Timestamp("2024-01-02")
+        sell = pd.Timestamp("2024-03-29")
+        ret = compute_spx_return(buy, sell, cp)
+        assert np.isfinite(ret)
+        assert ret != 0.0
+
+    def test_insufficient_data_returns_nan(self):
+        cp = pd.DataFrame({"date": [pd.Timestamp("2024-01-02")],
+                           "symbol": ["^GSPC"], "close": [4000]})
+        ret = compute_spx_return(pd.Timestamp("2024-01-01"),
+                                 pd.Timestamp("2024-03-31"), cp)
+        assert np.isnan(ret)
+
+    def test_no_gspc_data_returns_nan(self):
+        cp = pd.DataFrame({"date": pd.bdate_range("2024-01-01", periods=10),
+                           "symbol": "AAPL", "close": range(10)})
+        ret = compute_spx_return(pd.Timestamp("2024-01-01"),
+                                 pd.Timestamp("2024-03-31"), cp)
+        assert np.isnan(ret)

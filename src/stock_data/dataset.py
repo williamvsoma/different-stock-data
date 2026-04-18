@@ -168,10 +168,12 @@ def download_prices(symbols, start, end) -> pd.DataFrame:
     """Download daily close prices and return a tidy DataFrame."""
     print(f"  Downloading daily prices for {len(symbols)} symbols "
           f"({start.date()} to {end.date()})...")
-    prices = yf.download(symbols, start=start, end=end,
+    # Include ^GSPC for cap-weighted benchmark
+    dl_symbols = list(symbols) + ["^GSPC"]
+    prices = yf.download(dl_symbols, start=start, end=end,
                          interval="1d", group_by="ticker", threads=True)
     frames = []
-    for sym in symbols:
+    for sym in dl_symbols:
         try:
             if isinstance(prices.columns, pd.MultiIndex):
                 s = prices[(sym, "Close")].dropna()

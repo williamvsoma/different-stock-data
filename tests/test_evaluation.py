@@ -61,7 +61,7 @@ class TestEvaluateFactorsMetrics:
         prod_df = _make_prod_df()
         ci_lo, ci_hi, boot_means, ex_n = evaluate_factors(prod_df, {}, n_boot=200)
         captured = capsys.readouterr().out
-        assert "Information ratio" in captured
+        assert "IR (vs EW)" in captured
 
     def test_output_contains_sharpe(self, capsys):
         prod_df = _make_prod_df()
@@ -97,6 +97,22 @@ class TestEvaluateFactorsMetrics:
         evaluate_factors(prod_df, {}, n_boot=200)
         captured = capsys.readouterr().out
         assert "Annualized Sharpe" not in captured
+
+    def test_spx_benchmark_reported_when_present(self, capsys):
+        """When spx_ret column exists, SPX excess is reported."""
+        prod_df = _make_prod_df()
+        prod_df["spx_ret"] = prod_df["mkt_ret"] - 0.01  # SPX slightly lower
+        evaluate_factors(prod_df, {}, n_boot=200)
+        captured = capsys.readouterr().out
+        assert "S&P 500" in captured
+        assert "vs SPX" in captured
+
+    def test_works_without_spx_column(self, capsys):
+        """Backward compat: works fine without spx_ret column."""
+        prod_df = _make_prod_df()
+        assert "spx_ret" not in prod_df.columns
+        ci_lo, ci_hi, boot_means, ex_n = evaluate_factors(prod_df, {}, n_boot=200)
+        assert len(boot_means) == 200
 
 
 # ── print_simulation_summary ───────────────────────────────────────────────────
