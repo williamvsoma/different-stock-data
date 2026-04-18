@@ -70,6 +70,25 @@ def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
         m, s = fi_wide.loc[f].mean(), fi_wide.loc[f].std()
         print(f"  {f:38s} {m:.4f}  {s:.4f}  {m / (s + 1e-10):.2f}")
 
+    # LW vs diagonal stratification
+    if "used_lw" in prod_df.columns and prod_df["used_lw"].nunique() == 2:
+        print(f"\n{'='*80}")
+        print("COVARIANCE METHOD STRATIFICATION (Ledoit-Wolf vs Diagonal)")
+        print(f"{'='*80}\n")
+        for label, mask in [("Ledoit-Wolf", prod_df["used_lw"]),
+                             ("Diagonal",    ~prod_df["used_lw"])]:
+            sub = prod_df[mask]
+            if len(sub) == 0:
+                continue
+            sub_ex = sub["net_ret"] - sub["mkt_ret"]
+            ann_sharpe = sub_ex.mean() / (sub_ex.std() + 1e-10) * 2  # quarterly → annual
+            print(f"  {label} (N={len(sub)}):")
+            print(f"    Avg excess (net):   {sub_ex.mean():+.2%}")
+            print(f"    Annualized Sharpe:  {ann_sharpe:.2f}")
+            print(f"    Avg turnover:       {sub['turnover'].mean():.0%}")
+            print(f"    Avg holdings:       {sub['n_held'].mean():.0f}")
+            print()
+
 
 # ── Factor benchmarks + bootstrap ─────────────────────────────────────────────
 
