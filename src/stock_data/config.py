@@ -60,3 +60,6 @@ INITIAL_CAPITAL = 1_000_000
 COST_BPS = 20
 WEIGHT_THRESHOLD = 0.001
 N_BOOT = 10_000
+
+# Cost sensitivity analysis: test at multiple assumptions
+COST_SENSITIVITY_BPS = [10, 20, 30, 50]

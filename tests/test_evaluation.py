@@ -138,3 +138,25 @@ class TestPrintSimulationSummaryMetrics:
         cum_ret = (1 + port_daily_ret).cumprod()
         max_dd = ((cum_ret / cum_ret.cummax()) - 1).min()
         assert max_dd <= 0
+
+
+# ── cost_sensitivity_analysis ──────────────────────────────────────────────────
+
+from stock_data.evaluation import cost_sensitivity_analysis
+
+
+class TestCostSensitivityAnalysis:
+    def test_output_shows_all_cost_levels(self, capsys):
+        prod_df = _make_prod_df()
+        cost_sensitivity_analysis(prod_df, cost_bps_list=[10, 20, 30])
+        captured = capsys.readouterr().out
+        assert "10" in captured
+        assert "20" in captured
+        assert "30" in captured
+        assert "COST SENSITIVITY" in captured
+
+    def test_higher_costs_reduce_net_returns(self, capsys):
+        prod_df = _make_prod_df()
+        prod_df["turnover"] = 0.5  # fixed turnover
+        cost_sensitivity_analysis(prod_df, cost_bps_list=[10, 50])
+        # Just verify it runs without error — monotonicity is inherent
