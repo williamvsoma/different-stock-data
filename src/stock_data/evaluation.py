@@ -116,8 +116,17 @@ def evaluate_factors(prod_df, factor_results, n_boot=N_BOOT):
         avg_ret = fdf_match["port_ret"].mean()
         avg_ex = fdf_match["excess"].mean()
         win = (fdf_match["excess"] > 0).mean()
-        print(f"  {fname:25s} {avg_ret:+8.2%} {avg_ex:+7.2%} {win:5.0%} {len(fdf_match):3d}")
-        factor_excess_for_boot[fname] = fdf_match["excess"].values
+        # Show net returns if turnover was tracked
+        if "net_ret" in fdf_match.columns:
+            avg_net = fdf_match["net_ret"].mean()
+            avg_ex_net = fdf_match["excess_net"].mean()
+            avg_to = fdf_match["turnover"].mean()
+            print(f"  {fname:25s} {avg_ret:+8.2%} {avg_ex:+7.2%} {win:5.0%} {len(fdf_match):3d}"
+                  f"  (net: {avg_ex_net:+.2%}, TO: {avg_to:.0%})")
+            factor_excess_for_boot[fname] = fdf_match["excess_net"].values
+        else:
+            print(f"  {fname:25s} {avg_ret:+8.2%} {avg_ex:+7.2%} {win:5.0%} {len(fdf_match):3d}")
+            factor_excess_for_boot[fname] = fdf_match["excess"].values
 
     # Bootstrap
     print(f"\n{'='*80}")
@@ -551,3 +560,37 @@ def run_iteration_analysis(
                 naive_rc, _ = spearmanr(naive_pred[valid], act_vol[valid])
                 print(f"  {td.date()}: ML={row['vol_rc']:.3f}  "
                       f"Naive={naive_rc:.3f}  \u0394={row['vol_rc']-naive_rc:+.3f}")
+
+
+# ── Cost sensitivity analysis ──────────────────────────────────────────────────
+
+
+def cost_sensitivity_analysis(prod_df, cost_bps_list=None):
+    """Report strategy net performance at multiple cost assumptions.
+
+    Parameters
+    ----------
+    prod_df : DataFrame with columns gross_ret, mkt_ret, turnover
+    cost_bps_list : list of ints, cost assumptions in basis points
+    """
+    from stock_data.config import COST_SENSITIVITY_BPS
+
+    if cost_bps_list is None:
+        cost_bps_list = COST_SENSITIVITY_BPS
+
+    print("\n" + "=" * 80)
+    print("COST SENSITIVITY ANALYSIS")
+    print("=" * 80)
+    print(f"\n  {'Cost (bps)':>10s} {'Avg Net':>9s} {'Avg Excess':>11s} "
+          f"{'Sharpe':>7s} {'IR':>7s} {'Win%':>6s}")
+    print(f"  {'-'*55}")
+
+    for bps in cost_bps_list:
+        txc = prod_df["turnover"] * bps / 10000
+        net = prod_df["gross_ret"] - txc
+        ex = net - prod_df["mkt_ret"]
+        sharpe = (net.mean() / net.std() * np.sqrt(4)) if net.std() > 0 else 0
+        ir = (ex.mean() / ex.std() * np.sqrt(4)) if ex.std() > 0 else 0
+        win = (ex > 0).mean()
+        print(f"  {bps:>10d} {net.mean():+8.2%} {ex.mean():+10.2%} "
+              f"{sharpe:>7.2f} {ir:>7.2f} {win:5.0%}")
