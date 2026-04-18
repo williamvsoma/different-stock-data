@@ -115,3 +115,45 @@ def bootstrap_ci(vals, n_boot=10_000, seed=42):
     lo, hi = np.percentile(means, [2.5, 97.5])
     p_neg = np.mean(means <= 0)
     return lo, hi, p_neg, means
+
+
+def power_analysis_quarters(excess_mean, excess_std, alpha=0.05, power=0.80):
+    """Compute quarters needed for 80% power to detect observed excess return.
+
+    Uses the formula: N = (z_alpha + z_power)^2 * sigma^2 / mu^2
+    where z_alpha and z_power are standard normal quantiles.
+    Returns the required number of quarterly observations.
+    """
+    from scipy.stats import norm
+
+    if excess_std <= 0 or excess_mean == 0:
+        return float("inf")
+
+    z_a = norm.ppf(1 - alpha / 2)  # two-sided
+    z_b = norm.ppf(power)
+    n = ((z_a + z_b) ** 2 * excess_std ** 2) / excess_mean ** 2
+    return int(np.ceil(n))
+
+
+def block_bootstrap_ci(vals, block_size=4, n_boot=10_000, seed=42):
+    """Block bootstrap CI preserving autocorrelation in quarterly returns.
+
+    Uses non-overlapping blocks of `block_size` quarters.
+    Returns ``(lo, hi, p_neg, boot_means)``.
+    """
+    rng = np.random.RandomState(seed)
+    n = len(vals)
+    if n < block_size:
+        # Fall back to i.i.d. bootstrap
+        return bootstrap_ci(vals, n_boot, seed)
+
+    n_blocks = n // block_size
+    blocks = [vals[i * block_size:(i + 1) * block_size] for i in range(n_blocks)]
+
+    means = np.array([
+        np.mean(np.concatenate([blocks[i] for i in rng.randint(0, len(blocks), size=n_blocks)]))
+        for _ in range(n_boot)
+    ])
+    lo, hi = np.percentile(means, [2.5, 97.5])
+    p_neg = np.mean(means <= 0)
+    return lo, hi, p_neg, means

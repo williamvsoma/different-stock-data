@@ -19,7 +19,7 @@ from stock_data.config import (
     EARNINGS_LAG_DAYS, ENS_W, PROD_CFG, XGB_PARAMS, RIDGE_PARAMS, RF_PARAMS,
     COST_BPS, WEIGHT_THRESHOLD, N_BOOT,
 )
-from stock_data.modeling.predict import bootstrap_ci, safe_spearmanr
+from stock_data.modeling.predict import bootstrap_ci, block_bootstrap_ci, power_analysis_quarters, safe_spearmanr
 
 
 # ── Walk-forward summary ───────────────────────────────────────────────────────
@@ -119,6 +119,24 @@ def evaluate_factors(prod_df, factor_results, n_boot=N_BOOT):
     print(f"    95% CI:           [{ci_lo:+.2%}, {ci_hi:+.2%}]")
     print(f"    P(excess <= 0):   {boot_p:.3f}")
     print(f"    N quarters:       {len(ex_net_vals)}")
+
+    # Statistical power warning
+    n_q = len(ex_net_vals)
+    if ex_n.std() > 0 and ex_n.mean() != 0:
+        n_needed = power_analysis_quarters(ex_n.mean(), ex_n.std())
+        years_needed = n_needed / 4
+        print(f"\n  POWER ANALYSIS:")
+        if n_q < 20:
+            print(f"    ⚠  N={n_q} — INSUFFICIENT for statistical significance at conventional levels")
+        print(f"    Given observed excess vol ({ex_n.std():.2%}):")
+        print(f"    Need N={n_needed} quarters ({years_needed:.0f} years) for 80% power at α=0.05")
+
+    # Block bootstrap (preserving quarterly autocorrelation)
+    if n_q >= 8:
+        blo, bhi, bp, _ = block_bootstrap_ci(ex_net_vals, block_size=4, n_boot=n_boot)
+        print(f"\n  Block bootstrap (block_size=4, preserving autocorrelation):")
+        print(f"    95% CI:           [{blo:+.2%}, {bhi:+.2%}]")
+        print(f"    P(excess <= 0):   {bp:.3f}")
 
     for fname, fex in factor_excess_for_boot.items():
         if len(fex) < 3:
