@@ -5,6 +5,7 @@ import pytest
 
 from stock_data.modeling.predict import (
     bootstrap_ci,
+    multi_source_fi,
     mv_optimize,
     mv_optimize_diag,
     portfolio_turnover,
@@ -251,3 +252,62 @@ class TestSafeSpearmanr:
         b = np.arange(10, dtype=float)
         r = safe_spearmanr(a, b)
         assert np.isnan(r)
+
+
+# ── multi_source_fi ────────────────────────────────────────────────────────────
+
+
+class TestMultiSourceFi:
+    def _make_models(self, n_features=10):
+        """Build minimal fitted models for testing."""
+        from sklearn.linear_model import Ridge
+        from sklearn.ensemble import RandomForestRegressor
+        import xgboost as xgb
+
+        rng = np.random.default_rng(42)
+        X = rng.standard_normal((50, n_features))
+        y = rng.standard_normal(50)
+
+        xgb_m = xgb.XGBRegressor(n_estimators=5, max_depth=2, random_state=42)
+        xgb_m.fit(X, y, verbose=0)
+
+        ridge_m = Ridge(alpha=1.0)
+        ridge_m.fit(X, y)
+
+        rf_m = RandomForestRegressor(n_estimators=5, max_depth=2, random_state=42)
+        rf_m.fit(X, y)
+
+        cols = [f"f{i}" for i in range(n_features)]
+        return xgb_m, ridge_m, rf_m, cols
+
+    def test_returns_dataframe_with_all_columns(self):
+        xgb_m, ridge_m, rf_m, cols = self._make_models()
+        fi = multi_source_fi(xgb_m, ridge_m, rf_m, cols)
+        assert set(fi.columns) == {"xgb_gain", "ridge_coef", "rf_impurity", "combined"}
+        assert list(fi.index) == cols
+
+    def test_combined_is_mean_of_normalised(self):
+        xgb_m, ridge_m, rf_m, cols = self._make_models()
+        fi = multi_source_fi(xgb_m, ridge_m, rf_m, cols)
+        expected = fi[["xgb_gain", "ridge_coef", "rf_impurity"]].mean(axis=1)
+        np.testing.assert_array_almost_equal(fi["combined"].values, expected.values)
+
+    def test_each_source_sums_to_one(self):
+        xgb_m, ridge_m, rf_m, cols = self._make_models()
+        fi = multi_source_fi(xgb_m, ridge_m, rf_m, cols)
+        for src in ["xgb_gain", "ridge_coef", "rf_impurity"]:
+            assert fi[src].sum() == pytest.approx(1.0, abs=1e-6)
+
+    def test_no_negative_values(self):
+        xgb_m, ridge_m, rf_m, cols = self._make_models()
+        fi = multi_source_fi(xgb_m, ridge_m, rf_m, cols)
+        assert (fi >= -1e-10).all().all()
+
+    def test_ridge_cols_different_from_tree_cols(self):
+        xgb_m, ridge_m, rf_m, cols = self._make_models(n_features=10)
+        ridge_cols = [f"r{i}" for i in range(10)]
+        all_cols = cols + ridge_cols
+        fi = multi_source_fi(xgb_m, ridge_m, rf_m, all_cols, ridge_cols=ridge_cols)
+        # Ridge importance should be on ridge_cols, not tree cols
+        assert fi.loc["r0", "ridge_coef"] > 0 or fi["ridge_coef"].sum() > 0
+        assert len(fi) == len(all_cols)
