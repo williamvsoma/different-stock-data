@@ -148,12 +148,12 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         vol_m.fit(Xtr_sel, ytr_v, verbose=0)
         p_vol_ml = np.maximum(vol_m.predict(Xte_sel), VOL_FLOOR)
 
-        # Quality gate: if ML vol model is weak, fall back to hist_vol_3m
+        # Quality gate: if ML vol model is weak on training set, fall back to hist_vol_3m
         p_vol_naive = Xte_sel["hist_vol_3m"].values if "hist_vol_3m" in Xte_sel.columns else None
-        vol_rc_prelim = safe_spearmanr(p_vol_ml, ytr_v[-len(p_vol_ml):]) if len(p_vol_ml) >= 5 else np.nan
+        vol_rc_train = safe_spearmanr(vol_m.predict(Xtr_sel), ytr_v) if len(ytr_v) >= 10 else np.nan
         if (p_vol_naive is not None
-                and np.isfinite(vol_rc_prelim)
-                and vol_rc_prelim < VOL_RC_GATE):
+                and np.isfinite(vol_rc_train)
+                and vol_rc_train < VOL_RC_GATE):
             p_vol = np.maximum(np.nan_to_num(p_vol_naive, nan=p_vol_ml.mean()), VOL_FLOOR)
         else:
             p_vol = p_vol_ml
