@@ -26,18 +26,20 @@ for noisy financial data and deserve more weight. Equal weights may suffice.
 
 ## Results
 
-### Final Ranking (by Information Ratio)
+### Full Ranking (all 10 variants, by Information Ratio)
 
 | Rank | Variant | IR | Excess (net) | IC | Sharpe |
 |------|---------|-----|-------------|------|--------|
-| 1 | **baseline 50/25/25** | **10.09** | **+6.49%** | 0.1469 | **96.07** |
-| 2 | equal 33/33/33 | 9.43 | +5.71% | 0.1382 | 72.66 |
-| 3 | no_xgb 0/50/50 | 8.95 | +4.74% | 0.1120 | 47.59 |
-| 4 | xgb_solo | 7.57 | +6.38% | **0.1636** | 8.66 |
-| 5 | ridge_heavy 25/50/25 | 6.83 | +3.60% | 0.1204 | 43.08 |
-| 6 | ridge_solo | 5.07 | +2.46% | 0.0707 | 8.01 |
-| 7 | adaptive | 4.88 | +5.74% | 0.1566 | 35.20 |
-| 8 | rf_solo | 2.96 | +5.12% | **0.1684** | 13.72 |
+| 1 | no_ridge 67/0/33 | **29.30** | **+7.57%** | 0.1753 | 28.77 |
+| 2 | no_ridge 50/0/50 | 10.86 | +6.53% | **0.1821** | 75.03 |
+| 3 | **baseline 50/25/25** | 10.09 | +6.49% | 0.1469 | **96.07** |
+| 4 | equal 33/33/33 | 9.43 | +5.71% | 0.1382 | 72.66 |
+| 5 | no_xgb 0/50/50 | 8.95 | +4.74% | 0.1120 | 47.59 |
+| 6 | xgb_solo | 7.57 | +6.38% | 0.1636 | 8.66 |
+| 7 | ridge_heavy 25/50/25 | 6.83 | +3.60% | 0.1204 | 43.08 |
+| 8 | ridge_solo | 5.07 | +2.46% | 0.0707 | 8.01 |
+| 9 | adaptive | 4.88 | +5.74% | 0.1566 | 35.20 |
+| 10 | rf_solo | 2.96 | +5.12% | 0.1684 | 13.72 |
 
 ### Per-Model Signal Quality
 
@@ -49,39 +51,52 @@ for noisy financial data and deserve more weight. Equal weights may suffice.
 
 ## Key Findings
 
-1. **Baseline 50/25/25 wins** on both IR and Sharpe. No alternative beats it.
+1. **No-Ridge variants dominate on IR and IC.** Dropping Ridge (IC=0.071) yields
+   IC improvement of 19–24% and +1.1pp excess return. The 67/0/33 split has highest IR.
 
-2. **Hypothesis strongly refuted**: Ridge is the WEAKEST model (IC=0.071).
+2. **Baseline 50/25/25 wins on Sharpe** (96 vs 29). Ridge smooths predictions,
+   reducing quarter-to-quarter variance. Whether this is real stabilisation or
+   N=2 noise is unresolved.
+
+3. **Hypothesis strongly refuted**: Ridge is the WEAKEST model (IC=0.071).
    Giving it more weight degrades performance. The issue predicted "optimal XGB weight ≤33%" —
    opposite is true.
 
-3. **Ensemble adds substantial value** over best solo model:
-   - Best ensemble IR: 10.09
+4. **Ensemble adds substantial value** over best solo model:
+   - Best ensemble IR: 29.30 (no_ridge 67/0/33)
    - Best solo IR: 7.57 (XGB)
    - Diversification benefit is real.
 
-4. **XGB deserves high weight** because it has second-best IC (0.164) with
+5. **XGB deserves high weight** because it has second-best IC (0.164) with
    lower variance than RF (which has highest IC 0.169 but worst solo IR 2.96).
 
-5. **Adaptive weights fail** (IR=4.88): With N=2 quarters, the lookback
+6. **Adaptive weights fail** (IR=4.88): With N=2 quarters, the lookback
    mechanism overreacts to single-quarter noise. Q2 gave RF 53.5% weight
    based on Q1 which happened to be strong for RF.
 
-6. **RF paradox**: Highest per-model IC (0.1690) but worst solo IR (2.96).
+7. **RF paradox**: Highest per-model IC (0.1690) but worst solo IR (2.96).
    RF predictions have high signal but also high variance → needs mixing with
    stable models.
 
-### Why 50/25/25 Works
+### The Sharpe vs IC Tradeoff
 
-XGB provides the best risk-adjusted signal. RF adds diversification (different
-errors). Ridge, despite weak IC, smooths ensemble predictions (acts like a prior).
-The 50% XGB weight appropriately reflects signal-to-noise: XGB >> Ridge in IC,
-XGB ≈ RF in IC but more consistent.
+| Metric | Winner | Value |
+|--------|--------|-------|
+| Information Ratio | no_ridge 67/0/33 | 29.30 |
+| Excess return | no_ridge 67/0/33 | +7.57% |
+| Ensemble IC | no_ridge 50/0/50 | 0.1821 |
+| Sharpe ratio | baseline 50/25/25 | 96.07 |
+
+Ridge's role: despite poor IC, it smooths ensemble predictions (acts like a
+shrinkage prior), reducing position concentration and quarter-to-quarter variance.
+Removing it sharpens signal but increases volatility of returns.
 
 ## Paired Tests vs Baseline
 
 | Variant | Δ excess | t-stat |
 |---------|---------|--------|
+| no_ridge 67/0/33 | +1.08% | +5.15 |
+| no_ridge 50/0/50 | +0.04% | +0.56 |
 | equal | -0.77% | -20.82 |
 | ridge_heavy | -2.88% | -24.93 |
 | xgb_solo | -0.11% | -0.07 |
@@ -98,23 +113,7 @@ Note: t-stats with N=2 are unreliable but direction is consistent.
 - Adaptive weights need ≥5 quarters of history to stabilise
 - Per-model IC may change with more data
 - Results conditional on current feature set and regularisation
-
-## Follow-up: Dropping Ridge Entirely
-
-Given Ridge's weak IC (0.071), tested removing it and redistributing weight:
-
-| Variant | Excess (net) | IR | Sharpe | IC |
-|---------|-------------|-----|--------|------|
-| baseline 50/25/25 | +6.49% | 10.09 | 96.07 | 0.1469 |
-| **no_ridge 67/0/33** | **+7.57%** | **29.30** | 28.77 | **0.1753** |
-| no_ridge 50/0/50 | +6.53% | 10.86 | 75.03 | 0.1821 |
-
-**Dropping Ridge improves signal quality substantially** (IC +19% to +24%).
-Excess return increases +1.1pp. The 67/0/33 split has best IR.
-
-However: Sharpe drops (96→29) indicating more quarter-to-quarter variance.
-Ridge may act as portfolio stabiliser despite poor IC — its predictions smooth
-the ensemble, reducing position concentration.
+- Cannot distinguish "Ridge stabilises" from "N=2 noise" without more data
 
 ## Decision
 
