@@ -1,5 +1,7 @@
 """Portfolio optimization and prediction helpers."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
@@ -75,6 +77,11 @@ def mv_optimize(mu, cov, max_w, lam):
     w0 = np.ones(n) / n
     r = minimize(obj, w0, jac=jac, method="SLSQP", bounds=bds,
                  constraints=cons, options={"maxiter": 1000, "ftol": 1e-12})
+    if not r.success:
+        warnings.warn(
+            f"MV optimizer failed (N={n}): {r.message} "
+            f"mu_range=[{mu.min():.4f}, {mu.max():.4f}]"
+        )
     w = np.maximum(r.x if r.success else w0, 0)
     return w / w.sum()
 
@@ -92,6 +99,11 @@ def mv_optimize_diag(mu, vol, max_w, lam):
     w0 = np.ones(n) / n
     r = minimize(obj, w0, method="SLSQP", bounds=bds,
                  constraints=cons, options={"maxiter": 1000, "ftol": 1e-12})
+    if not r.success:
+        warnings.warn(
+            f"MV diag optimizer failed (N={n}): {r.message} "
+            f"mu_range=[{mu.min():.4f}, {mu.max():.4f}]"
+        )
     w = np.maximum(r.x if r.success else w0, 0)
     return w / w.sum()
 

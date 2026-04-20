@@ -55,6 +55,61 @@ MODELS = Path("models")
 FIGURES = Path("reports/figures")
 
 
+def _validate_interim():
+    """Fail fast if interim data is missing or corrupt."""
+    required_files = [
+        "features_raw.parquet", "bs_raw.parquet", "cf_raw.parquet",
+        "annual_raw.parquet", "close_prices.parquet", "macro_df.parquet",
+        "sp500_membership.parquet",
+    ]
+    for f in required_files:
+        p = INTERIM / f
+        if not p.exists():
+            raise FileNotFoundError(f"Missing interim file: {p}")
+
+    features_raw = pd.read_parquet(INTERIM / "features_raw.parquet")
+    n_rows = len(features_raw)
+    if n_rows < 1000:
+        raise ValueError(f"Interim features_raw has only {n_rows} rows (expected >1000)")
+
+    n_symbols = features_raw.index.get_level_values("symbol").nunique()
+    if n_symbols < 100:
+        raise ValueError(f"Only {n_symbols} symbols in interim data (expected >100)")
+
+    dates = features_raw.index.get_level_values("date")
+    span_days = (dates.max() - dates.min()).days
+    if span_days < 365:
+        raise ValueError(f"Date span is only {span_days} days (expected >365)")
+
+    nan_frac = features_raw.isna().mean().mean()
+    if nan_frac > 0.8:
+        raise ValueError(f"Interim data is {nan_frac:.0%} NaN (exceeds 80% threshold)")
+
+    print(f"  Interim validation passed: {n_rows:,} rows, {n_symbols} symbols, "
+          f"{span_days}d span, {nan_frac:.1%} NaN")
+
+
+def _validate_processed():
+    """Fail fast if processed data is missing or corrupt."""
+    rmd_path = PROCESSED / "risk_model_df.parquet"
+    cols_path = PROCESSED / "feature_cols.pkl"
+    if not rmd_path.exists():
+        raise FileNotFoundError(f"Missing processed file: {rmd_path}")
+    if not cols_path.exists():
+        raise FileNotFoundError(f"Missing processed file: {cols_path}")
+
+    rmd = pd.read_parquet(rmd_path)
+    if len(rmd) < 500:
+        raise ValueError(f"risk_model_df has only {len(rmd)} rows (expected >500)")
+    if "next_q_return" not in rmd.columns:
+        raise ValueError("risk_model_df missing 'next_q_return' column")
+    if "realized_vol" not in rmd.columns:
+        raise ValueError("risk_model_df missing 'realized_vol' column")
+
+    print(f"  Processed validation passed: {len(rmd):,} rows, "
+          f"{rmd.columns.size} columns")
+
+
 def stage_data():
     """Download raw data and save interim parquet files."""
     INTERIM.mkdir(parents=True, exist_ok=True)
@@ -84,7 +139,7 @@ def stage_data():
     min_date = all_dates.min() - pd.Timedelta(days=400)
     max_date = all_dates.max() + pd.Timedelta(days=120)
 
-    close_prices = download_prices(inc_symbols, min_date, max_date)
+    close_prices, failed_symbols = download_prices(inc_symbols, min_date, max_date)
     macro_df = download_macro(min_date, max_date)
 
     # Save interim data
@@ -101,6 +156,7 @@ def stage_data():
 def stage_features():
     """Build features from interim data and save processed parquet files."""
     PROCESSED.mkdir(parents=True, exist_ok=True)
+    _validate_interim()
 
     # Load interim data
     features_raw = pd.read_parquet(INTERIM / "features_raw.parquet")
@@ -143,6 +199,7 @@ def stage_train():
     """Run walk-forward backtest, evaluate, and save model outputs."""
     MODELS.mkdir(parents=True, exist_ok=True)
     FIGURES.mkdir(parents=True, exist_ok=True)
+    _validate_processed()
 
     # Load processed data
     risk_model_df = pd.read_parquet(PROCESSED / "risk_model_df.parquet")

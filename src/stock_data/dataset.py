@@ -164,8 +164,11 @@ def reshape_annual_income(annual_dict: dict) -> pd.DataFrame:
 # ── Price data ─────────────────────────────────────────────────────────────────
 
 
-def download_prices(symbols, start, end) -> pd.DataFrame:
-    """Download daily close prices and return a tidy DataFrame."""
+def download_prices(symbols, start, end) -> tuple[pd.DataFrame, list[str]]:
+    """Download daily close prices and return (tidy DataFrame, failed_symbols).
+
+    Raises RuntimeError if >10% of symbols fail to download.
+    """
     print(f"  Downloading daily prices for {len(symbols)} symbols "
           f"({start.date()} to {end.date()})...")
     # Include ^GSPC for cap-weighted benchmark
@@ -173,6 +176,7 @@ def download_prices(symbols, start, end) -> pd.DataFrame:
     prices = yf.download(dl_symbols, start=start, end=end,
                          interval="1d", group_by="ticker", threads=True)
     frames = []
+    successful = set()
     for sym in dl_symbols:
         try:
             if isinstance(prices.columns, pd.MultiIndex):
@@ -183,13 +187,26 @@ def download_prices(symbols, start, end) -> pd.DataFrame:
                 frames.append(
                     pd.DataFrame({"date": s.index, "symbol": sym, "close": s.values})
                 )
+                successful.add(sym)
         except (KeyError, TypeError):
             pass
+    failed = [sym for sym in dl_symbols if sym not in successful]
     close = pd.concat(frames, ignore_index=True)
     close["date"] = pd.to_datetime(close["date"])
+    n_requested = len(symbols)  # exclude ^GSPC from coverage calc
+    n_failed_stocks = len([s for s in failed if s != "^GSPC"])
+    coverage_pct = (n_requested - n_failed_stocks) / n_requested * 100
     print(f"  close_prices: {len(close):,} rows, "
-          f"{close['symbol'].nunique()} symbols")
-    return close
+          f"{close['symbol'].nunique()} symbols "
+          f"(coverage: {coverage_pct:.1f}%, {n_failed_stocks} failed)")
+    if n_failed_stocks > 0:
+        print(f"  Failed symbols: {failed[:20]}{'...' if len(failed) > 20 else ''}")
+    if n_failed_stocks > n_requested * 0.10:
+        raise RuntimeError(
+            f">{10}% of symbols failed price download: "
+            f"{n_failed_stocks}/{n_requested} ({100-coverage_pct:.1f}%)"
+        )
+    return close, failed
 
 
 # ── Macro data ─────────────────────────────────────────────────────────────────
