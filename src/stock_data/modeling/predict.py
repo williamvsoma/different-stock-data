@@ -1,5 +1,7 @@
 """Portfolio optimization and prediction helpers."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
@@ -15,6 +17,17 @@ def winsorize(a, pct=0.05):
 def shrink_to_mean(a, alpha=0.5):
     """Shrink predictions toward cross-sectional mean."""
     return alpha * a + (1 - alpha) * np.mean(a)
+
+
+def rank_transform_mu(a):
+    """Convert return predictions to percentile ranks for optimizer input.
+
+    Produces uniform [0,1] values that decouple shrinkage_alpha from
+    risk_aversion in MV optimization.
+    """
+    from scipy.stats import rankdata
+    ranks = rankdata(a, method="average")
+    return (ranks - 1) / max(len(ranks) - 1, 1)
 
 
 def ledoit_wolf_cov(symbols, buy_date, close_prices, lookback=252):
@@ -75,6 +88,11 @@ def mv_optimize(mu, cov, max_w, lam):
     w0 = np.ones(n) / n
     r = minimize(obj, w0, jac=jac, method="SLSQP", bounds=bds,
                  constraints=cons, options={"maxiter": 1000, "ftol": 1e-12})
+    if not r.success:
+        warnings.warn(
+            f"MV optimizer failed (N={n}): {r.message} "
+            f"mu_range=[{mu.min():.4f}, {mu.max():.4f}]"
+        )
     w = np.maximum(r.x if r.success else w0, 0)
     return w / w.sum()
 
@@ -92,6 +110,11 @@ def mv_optimize_diag(mu, vol, max_w, lam):
     w0 = np.ones(n) / n
     r = minimize(obj, w0, method="SLSQP", bounds=bds,
                  constraints=cons, options={"maxiter": 1000, "ftol": 1e-12})
+    if not r.success:
+        warnings.warn(
+            f"MV diag optimizer failed (N={n}): {r.message} "
+            f"mu_range=[{mu.min():.4f}, {mu.max():.4f}]"
+        )
     w = np.maximum(r.x if r.success else w0, 0)
     return w / w.sum()
 
@@ -148,12 +171,13 @@ def multi_source_fi(xgb_m, ridge_m, rf_m, feature_cols, ridge_cols=None):
     else:
         fi["rf_impurity"] = 0.0
 
-    # Combined: equal-weight average of normalised importances
+    # Combined: equal-weight average of normalised importances (active models only)
     for col in ["xgb_gain", "ridge_coef", "rf_impurity"]:
         s = fi[col].sum()
         if s > 0:
             fi[col] = fi[col] / s
-    fi["combined"] = fi[["xgb_gain", "ridge_coef", "rf_impurity"]].mean(axis=1)
+    active_cols = [c for c in ["xgb_gain", "ridge_coef", "rf_impurity"] if fi[c].sum() > 0]
+    fi["combined"] = fi[active_cols].mean(axis=1) if active_cols else 0.0
 
     return fi
 
@@ -177,16 +201,18 @@ def bootstrap_ci(vals, n_boot=10_000, seed=42):
 def compute_spx_return(buy_date, sell_date, close_prices):
     """Compute S&P 500 (^GSPC) return between buy_date and sell_date.
 
+    Uses the same price-selection convention as strategy returns:
+    first available close on or after each target date.
     Returns the total return or np.nan if data is insufficient.
     """
     spx = close_prices[
         (close_prices["symbol"] == "^GSPC")
-        & (close_prices["date"] >= buy_date)
-        & (close_prices["date"] <= sell_date)
     ].sort_values("date")
-    if len(spx) < 5:
+    buy_w = spx[spx["date"] >= buy_date]["close"]
+    sell_w = spx[spx["date"] >= sell_date]["close"]
+    if len(buy_w) == 0 or len(sell_w) == 0:
         return np.nan
-    return spx["close"].iloc[-1] / spx["close"].iloc[0] - 1
+    return sell_w.iloc[0] / buy_w.iloc[0] - 1
 
 
 def mv_optimize_turnover(mu, cov, max_w, lam, prev_w, max_turnover):
@@ -265,24 +291,27 @@ def power_analysis_quarters(excess_mean, excess_std, alpha=0.05, power=0.80):
 
 
 def block_bootstrap_ci(vals, block_size=4, n_boot=10_000, seed=42):
-    """Block bootstrap CI preserving autocorrelation in quarterly returns.
+    """Circular block bootstrap CI preserving autocorrelation in quarterly returns.
 
-    Uses non-overlapping blocks of `block_size` quarters.
+    Uses circular wrapping so all observations are included regardless of
+    whether len(vals) is divisible by block_size.
     Returns ``(lo, hi, p_neg, boot_means)``.
     """
     rng = np.random.RandomState(seed)
     n = len(vals)
     if n < block_size:
-        # Fall back to i.i.d. bootstrap
         return bootstrap_ci(vals, n_boot, seed)
 
-    n_blocks = n // block_size
-    blocks = [vals[i * block_size:(i + 1) * block_size] for i in range(n_blocks)]
+    # Circular: extend vals by wrapping
+    extended = np.concatenate([vals, vals[:block_size - 1]])
+    n_blocks_needed = int(np.ceil(n / block_size))
 
-    means = np.array([
-        np.mean(np.concatenate([blocks[i] for i in rng.randint(0, len(blocks), size=n_blocks)]))
-        for _ in range(n_boot)
-    ])
+    means = np.empty(n_boot)
+    for b in range(n_boot):
+        starts = rng.randint(0, n, size=n_blocks_needed)
+        sample = np.concatenate([extended[s:s + block_size] for s in starts])[:n]
+        means[b] = sample.mean()
+
     lo, hi = np.percentile(means, [2.5, 97.5])
     p_neg = np.mean(means <= 0)
     return lo, hi, p_neg, means

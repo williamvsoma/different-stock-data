@@ -9,26 +9,29 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.stats import spearmanr, pearsonr
-import xgboost as xgb
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge
-from sklearn.ensemble import RandomForestRegressor
 
 from stock_data.config import (
     EARNINGS_LAG_DAYS, ENS_W, PROD_CFG, XGB_PARAMS, RIDGE_PARAMS, RF_PARAMS,
     COST_BPS, WEIGHT_THRESHOLD, N_BOOT,
 )
 from stock_data.modeling.predict import bootstrap_ci, block_bootstrap_ci, power_analysis_quarters, safe_spearmanr
+from stock_data.modeling.train import fit_ensemble
 
 
 # ── Walk-forward summary ───────────────────────────────────────────────────────
 
 
 def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
-    """Print production walk-forward summary with feature importance stability."""
+    """Print production walk-forward summary with feature importance stability.
+
+    Also exports prod_df to CSV in reports/ for downstream analysis.
+    """
     ex_g = prod_df["gross_ret"] - prod_df["mkt_ret"]
     ex_n = prod_df["net_ret"] - prod_df["mkt_ret"]
+
+    # IC standard errors
+    ic_mean = prod_df["ret_rc"].mean()
+    ic_se = prod_df["ret_rc"].std() / np.sqrt(len(prod_df)) if len(prod_df) > 1 else np.nan
 
     print(f"\n{'='*80}")
     print(f"PRODUCTION RESULTS ({len(prod_df)} quarters)")
@@ -46,6 +49,8 @@ def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
         ("Avg turnover (one-way)",  f"{prod_df['turnover'].mean():.0%}"),
         ("Avg tx cost",             f"{prod_df['tx_cost'].mean():.2%}"),
         ("Ledoit-Wolf used",        f"{prod_df['used_lw'].sum()}/{len(prod_df)}"),
+        ("Mean IC (ret_rc)",        f"{ic_mean:.3f} ± {ic_se:.3f}"),
+        ("N features",              f"{len(feature_cols_all)}"),
     ]
     if "spx_ret" in prod_df.columns and prod_df["spx_ret"].notna().any():
         spx_valid = prod_df[prod_df["spx_ret"].notna()]
@@ -108,6 +113,30 @@ def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
             print(f"    Avg turnover:       {sub['turnover'].mean():.0%}")
             print(f"    Avg holdings:       {sub['n_held'].mean():.0f}")
             print()
+
+    # CSV export for downstream analysis
+    from pathlib import Path
+    reports_dir = Path("reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = reports_dir / "walk_forward_results.csv"
+    prod_df.to_csv(csv_path, index=False)
+    print(f"  Results exported to {csv_path}")
+
+    # Return structured metrics for programmatic access
+    return {
+        "n_quarters": len(prod_df),
+        "avg_gross_ret": prod_df["gross_ret"].mean(),
+        "avg_net_ret": prod_df["net_ret"].mean(),
+        "avg_mkt_ret": prod_df["mkt_ret"].mean(),
+        "avg_excess_gross": ex_g.mean(),
+        "avg_excess_net": ex_n.mean(),
+        "win_rate": (ex_n > 0).mean(),
+        "avg_holdings": prod_df["n_held"].mean(),
+        "avg_turnover": prod_df["turnover"].mean(),
+        "ic_mean": ic_mean,
+        "ic_se": ic_se,
+        "n_features": len(feature_cols_all),
+    }
 
 
 # ── Factor benchmarks + bootstrap ─────────────────────────────────────────────
@@ -510,8 +539,14 @@ def print_simulation_summary(sim_df, mkt_sim, initial_capital):
 def run_iteration_analysis(
     prod_df, prod_fi, prod_weights_history,
     risk_model_df, feature_cols_all, close_prices,
+    cfg=None, ens_weights=None,
 ):
     """Stable-feature model + factor-neutral attribution + vol model comparison."""
+    if cfg is None:
+        cfg = PROD_CFG
+    if ens_weights is None:
+        ens_weights = ENS_W
+
     X_p = risk_model_df[feature_cols_all].copy()
     y_ret_p = risk_model_df["next_q_return"].copy()
     y_vol_p = risk_model_df["realized_vol"].copy()
@@ -539,7 +574,7 @@ def run_iteration_analysis(
         if len(stable_feat) >= 5:
             print(f"  Re-running with {len(stable_feat)} stable features...")
             unique_dates = sorted(dp.unique())
-            max_q = PROD_CFG.get("max_train_q")
+            max_q = cfg.get("max_train_q")
             stable_results = []
             for _, row in prod_df.iterrows():
                 td = row["test_date"]
@@ -552,21 +587,7 @@ def run_iteration_analysis(
                     continue
                 Xtr_raw = X_p.loc[tr_m, stable_feat]
                 Xte_raw = X_p.loc[te_m, stable_feat]
-                # XGBoost handles NaN natively (matches train.py)
-                xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
-                xgb_m.fit(Xtr_raw, y_ret_p[tr_m], verbose=0)
-                # Ridge and RF get median-imputed + scaled data
-                imp = SimpleImputer(strategy="median")
-                sc = StandardScaler()
-                X_tr_n = sc.fit_transform(imp.fit_transform(Xtr_raw.values))
-                X_te_n = sc.transform(imp.transform(Xte_raw.values))
-                rdg_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
-                rdg_m.fit(X_tr_n, y_ret_p[tr_m])
-                rf_m = RandomForestRegressor(**RF_PARAMS)
-                rf_m.fit(X_tr_n, y_ret_p[tr_m])
-                p_ens = (ENS_W["xgb"] * xgb_m.predict(Xte_raw)
-                         + ENS_W["ridge"] * rdg_m.predict(X_te_n)
-                         + ENS_W["rf"] * rf_m.predict(X_te_n))
+                p_ens, _, _, _, _ = fit_ensemble(Xtr_raw, Xte_raw, y_ret_p[tr_m], ens_weights)
                 rrc, _ = spearmanr(p_ens, y_ret_p[te_m])
                 stable_results.append({
                     "quarter": td, "ret_rc_stable": rrc, "ret_rc_full": row["ret_rc"],

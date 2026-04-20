@@ -40,15 +40,15 @@ def filter_by_membership(df: pd.DataFrame, sp500_df: pd.DataFrame) -> pd.DataFra
     """Keep only (symbol, date) rows where the symbol was in the S&P 500 at that date.
 
     *df* must have a ``(symbol, date)`` MultiIndex.
+    Vectorized: builds membership sets per unique date, then uses set lookups.
     """
     if len(df) == 0:
         return df
     idx = df.index.to_frame(index=False)
     unique_dates = idx["date"].unique()
-    # Pre-compute membership sets for all dates to avoid redundant filtering
     membership = {d: set(get_universe_at_date(sp500_df, d)) for d in unique_dates}
-    mask = idx.apply(lambda r: r["symbol"] in membership[r["date"]], axis=1)
-    return df.loc[mask.values]
+    mask = np.array([sym in membership[dt] for sym, dt in zip(idx["symbol"], idx["date"])])
+    return df.loc[mask]
 
 
 # ── Financial statements ───────────────────────────────────────────────────────
@@ -164,8 +164,22 @@ def reshape_annual_income(annual_dict: dict) -> pd.DataFrame:
 # ── Price data ─────────────────────────────────────────────────────────────────
 
 
-def download_prices(symbols, start, end) -> pd.DataFrame:
-    """Download daily close prices and return a tidy DataFrame."""
+def download_prices(symbols, start, end, existing_prices=None) -> tuple[pd.DataFrame, list[str]]:
+    """Download daily close prices and return (tidy DataFrame, failed_symbols).
+
+    If ``existing_prices`` is provided, only downloads data after the latest
+    date in the existing dataset (incremental mode).
+
+    Raises RuntimeError if >10% of symbols fail to download.
+    """
+    if existing_prices is not None and len(existing_prices) > 0:
+        latest = existing_prices["date"].max()
+        if latest >= end:
+            print(f"  Prices already up to date (latest: {latest.date()})")
+            return existing_prices, []
+        start = latest + pd.Timedelta(days=1)
+        print(f"  Incremental download from {start.date()} to {end.date()}")
+
     print(f"  Downloading daily prices for {len(symbols)} symbols "
           f"({start.date()} to {end.date()})...")
     # Include ^GSPC for cap-weighted benchmark
@@ -173,6 +187,7 @@ def download_prices(symbols, start, end) -> pd.DataFrame:
     prices = yf.download(dl_symbols, start=start, end=end,
                          interval="1d", group_by="ticker", threads=True)
     frames = []
+    successful = set()
     for sym in dl_symbols:
         try:
             if isinstance(prices.columns, pd.MultiIndex):
@@ -183,13 +198,62 @@ def download_prices(symbols, start, end) -> pd.DataFrame:
                 frames.append(
                     pd.DataFrame({"date": s.index, "symbol": sym, "close": s.values})
                 )
+                successful.add(sym)
         except (KeyError, TypeError):
             pass
+    failed = [sym for sym in dl_symbols if sym not in successful]
     close = pd.concat(frames, ignore_index=True)
     close["date"] = pd.to_datetime(close["date"])
+    n_requested = len(symbols)  # exclude ^GSPC from coverage calc
+    n_failed_stocks = len([s for s in failed if s != "^GSPC"])
+    coverage_pct = (n_requested - n_failed_stocks) / n_requested * 100
     print(f"  close_prices: {len(close):,} rows, "
-          f"{close['symbol'].nunique()} symbols")
-    return close
+          f"{close['symbol'].nunique()} symbols "
+          f"(coverage: {coverage_pct:.1f}%, {n_failed_stocks} failed)")
+    if n_failed_stocks > 0:
+        print(f"  Failed symbols: {failed[:20]}{'...' if len(failed) > 20 else ''}")
+    if n_failed_stocks > n_requested * 0.10:
+        raise RuntimeError(
+            f">{10}% of symbols failed price download: "
+            f"{n_failed_stocks}/{n_requested} ({100-coverage_pct:.1f}%)"
+        )
+
+    # Merge with existing data in incremental mode
+    if existing_prices is not None and len(existing_prices) > 0:
+        close = pd.concat([existing_prices, close], ignore_index=True)
+        close = close.drop_duplicates(subset=["symbol", "date"]).sort_values(["symbol", "date"])
+        print(f"  After merge: {len(close):,} total rows")
+
+    return close, failed
+
+
+def build_returns_panel(close_prices):
+    """Pre-compute a (date × symbol) daily returns panel.
+
+    Returns a dict with keys:
+    - 'close_panel': DataFrame (date × symbol) of close prices
+    - 'returns_panel': DataFrame (date × symbol) of daily returns
+    - 'grouped': dict {symbol: sorted Series of close prices indexed by date}
+
+    This avoids redundant groupby/pivot in momentum_features and risk_features.
+    """
+    close_panel = close_prices.pivot_table(
+        index="date", columns="symbol", values="close",
+    )
+    close_panel = close_panel.sort_index()
+    returns_panel = close_panel.pct_change()
+
+    # Pre-grouped for per-symbol lookups (still needed by some code paths)
+    grouped = {
+        sym: close_panel[sym].dropna()
+        for sym in close_panel.columns
+    }
+
+    return {
+        "close_panel": close_panel,
+        "returns_panel": returns_panel,
+        "grouped": grouped,
+    }
 
 
 # ── Macro data ─────────────────────────────────────────────────────────────────
@@ -235,59 +299,81 @@ def download_macro(start, end) -> pd.DataFrame:
 
 
 def compute_forward_returns(close_prices, sym_date_pairs) -> pd.DataFrame:
-    """Compute next-quarter returns with EARNINGS_LAG_DAYS delay."""
-    records = []
-    for symbol in close_prices["symbol"].unique():
-        grp = close_prices[close_prices["symbol"] == symbol].set_index("date").sort_index()
-        if grp.empty:
-            continue
-        stock_dates = (
-            sym_date_pairs[sym_date_pairs.get_level_values("symbol") == symbol]
-            .get_level_values("date")
-        )
-        for q_date in stock_dates:
-            buy_date = q_date + pd.Timedelta(days=EARNINGS_LAG_DAYS)
-            sell_date = buy_date + pd.DateOffset(months=3)
-            buy_w = grp.loc[
-                buy_date:buy_date + pd.Timedelta(days=10), "close"
-            ]
-            sell_w = grp.loc[
-                sell_date - pd.Timedelta(days=5):sell_date + pd.Timedelta(days=5), "close"
-            ]
-            if len(buy_w) > 0 and len(sell_w) > 0:
-                ret = sell_w.iloc[0] / buy_w.iloc[0] - 1
-                records.append({
-                    "symbol": symbol,
-                    "date": q_date,
-                    "buy_date": buy_w.index[0],
-                    "sell_date": sell_w.index[0],
-                    "next_q_return": ret,
-                })
-    return pd.DataFrame(records)
+    """Compute next-quarter returns with EARNINGS_LAG_DAYS delay.
+
+    Vectorized: uses merge_asof for buy/sell price lookups instead of
+    per-symbol per-quarter Python loops.
+    """
+    # Build (symbol, q_date) frame from MultiIndex
+    pairs = sym_date_pairs.to_frame(index=False)
+    pairs["buy_target"] = pairs["date"] + pd.Timedelta(days=EARNINGS_LAG_DAYS)
+    pairs["sell_target"] = pairs["buy_target"] + pd.DateOffset(months=3)
+
+    cp = close_prices.sort_values(["symbol", "date"])
+
+    # Prepare sorted copies for buy and sell lookups
+    # merge_asof requires both sides sorted by the merge key
+    cp_buy = cp.rename(columns={"date": "buy_date", "close": "buy_price"}).sort_values("buy_date")
+    cp_sell = cp.rename(columns={"date": "sell_date", "close": "sell_price"}).sort_values("sell_date")
+
+    # merge_asof for buy prices: first trade on or after buy_target (within 10 days)
+    buy = pd.merge_asof(
+        pairs.sort_values("buy_target"),
+        cp_buy,
+        left_on="buy_target", right_on="buy_date",
+        by="symbol", direction="forward", tolerance=pd.Timedelta(days=10),
+    )
+
+    # merge_asof for sell prices: first trade on or after sell_target (within 10 days)
+    sell = pd.merge_asof(
+        pairs.sort_values("sell_target"),
+        cp_sell,
+        left_on="sell_target", right_on="sell_date",
+        by="symbol", direction="forward", tolerance=pd.Timedelta(days=10),
+    )
+
+    # Join buy and sell on (symbol, date)
+    merged = buy.merge(
+        sell[["symbol", "date", "sell_date", "sell_price"]],
+        on=["symbol", "date"], how="inner",
+    )
+    valid = merged["buy_price"].notna() & merged["sell_price"].notna()
+    merged = merged[valid].copy()
+    merged["next_q_return"] = merged["sell_price"] / merged["buy_price"] - 1
+    return merged[["symbol", "date", "buy_date", "sell_date", "next_q_return"]]
 
 
 # ── Realized volatility ───────────────────────────────────────────────────────
 
 
 def compute_realized_vol(returns_df, close_prices) -> pd.DataFrame:
-    """Compute realized forward volatility for each (symbol, quarter)."""
+    """Compute realized forward volatility for each (symbol, quarter).
+
+    Vectorized: groups daily prices by symbol once, then computes
+    statistics for each holding period via vectorized slice operations.
+    """
+    grouped = {
+        sym: grp.sort_values("date").set_index("date")["close"]
+        for sym, grp in close_prices.groupby("symbol")
+    }
     records = []
     for _, row in returns_df.iterrows():
         sym, buy_dt, sell_dt = row["symbol"], row["buy_date"], row["sell_date"]
-        daily = close_prices[
-            (close_prices["symbol"] == sym)
-            & (close_prices["date"] >= buy_dt)
-            & (close_prices["date"] <= sell_dt)
-        ].sort_values("date")
+        series = grouped.get(sym)
+        if series is None:
+            continue
+        daily = series.loc[buy_dt:sell_dt]
         if len(daily) < 10:
             continue
-        dr = daily["close"].pct_change().dropna()
+        dr = daily.pct_change().dropna()
+        neg = dr[dr < 0]
+        cum = daily.values
         records.append({
             "symbol": sym,
             "date": row["date"],
             "realized_vol": dr.std() * np.sqrt(252),
-            "realized_downside_vol": dr[dr < 0].std() * np.sqrt(252),
-            "realized_max_dd": (daily["close"] / daily["close"].cummax() - 1).min(),
+            "realized_downside_vol": neg.std() * np.sqrt(252) if len(neg) > 0 else np.nan,
+            "realized_max_dd": (cum / np.maximum.accumulate(cum) - 1).min(),
             "realized_var5": dr.quantile(0.05),
             "realized_skew": dr.skew(),
             "realized_kurtosis": dr.kurtosis(),

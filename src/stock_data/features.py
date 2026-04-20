@@ -92,7 +92,8 @@ def balance_sheet_features(features_raw, bs_raw) -> pd.DataFrame:
 
     feat["roe"] = ni / total_equity.replace(0, np.nan)
     feat["roa"] = ni / total_assets.replace(0, np.nan)
-    feat["roic"] = ebit / (total_equity + total_debt).replace(0, np.nan)
+    invested_capital = (total_equity.fillna(0) + total_debt.fillna(0) - cash.fillna(0)).replace(0, np.nan)
+    feat["roic"] = ebit / invested_capital
     feat["debt_to_equity"] = total_debt / total_equity.replace(0, np.nan)
     feat["debt_to_assets"] = total_debt / total_assets.replace(0, np.nan)
     feat["leverage_ratio"] = total_assets / total_equity.replace(0, np.nan)
@@ -224,13 +225,15 @@ def qoq_features(feat, features_raw) -> pd.DataFrame:
     return feat
 
 
-def momentum_features(features_raw, close_prices) -> pd.DataFrame:
+def momentum_features(features_raw, close_prices, price_panel=None) -> pd.DataFrame:
     """Price momentum and short-term volatility."""
-    # Pre-group by symbol: O(n) instead of O(n_pairs * n_prices) filtering
-    grouped = {
-        sym: grp.sort_values("date").set_index("date")["close"]
-        for sym, grp in close_prices.groupby("symbol")
-    }
+    if price_panel is not None:
+        grouped = price_panel["grouped"]
+    else:
+        grouped = {
+            sym: grp.sort_values("date").set_index("date")["close"]
+            for sym, grp in close_prices.groupby("symbol")
+        }
 
     records = []
     for symbol, q_date in features_raw.index.tolist():
@@ -306,17 +309,22 @@ def clip_outliers(features_all: pd.DataFrame, raw_cols, n_std=5):
 # ── Risk features ──────────────────────────────────────────────────────────────
 
 
-def risk_features(returns_full, close_prices) -> pd.DataFrame:
+def risk_features(returns_full, close_prices, price_panel=None) -> pd.DataFrame:
     """Historical vol, beta, drawdown, and higher moments (no lookahead)."""
-    mkt_pivot = close_prices.pivot(index="date", columns="symbol", values="close")
-    mkt_mean = mkt_pivot.mean(axis=1)
-    mkt_daily_ret = mkt_mean.pct_change().dropna()
+    # Use ^GSPC (S&P 500 index) as market proxy for proper CAPM beta
+    spx_prices = close_prices[close_prices["symbol"] == "^GSPC"].set_index("date").sort_index()
+    mkt_daily_ret = spx_prices["close"].pct_change().dropna()
 
-    # Pre-group by symbol: O(n) instead of O(n_pairs * n_prices) filtering
-    grouped = {
-        sym: grp.sort_values("date").set_index("date")
-        for sym, grp in close_prices.groupby("symbol")
-    }
+    if price_panel is not None:
+        grouped = {
+            sym: grp_s.dropna().to_frame("close")
+            for sym, grp_s in price_panel["close_panel"].items()
+        }
+    else:
+        grouped = {
+            sym: grp.sort_values("date").set_index("date")
+            for sym, grp in close_prices.groupby("symbol")
+        }
 
     records = []
     for sym, q_date in returns_full[["symbol", "date"]].values.tolist():
@@ -381,6 +389,7 @@ def risk_features(returns_full, close_prices) -> pd.DataFrame:
 def build_features(
     features_raw, bs_raw, cf_raw, annual_raw,
     close_prices, macro_df, returns_df, returns_full,
+    price_panel=None,
 ):
     """Assemble the full feature matrix + targets for modeling.
 
@@ -395,7 +404,7 @@ def build_features(
     feat = qoq_features(feat, features_raw)
 
     # Momentum
-    mom = momentum_features(features_raw, close_prices)
+    mom = momentum_features(features_raw, close_prices, price_panel)
     feat = feat.join(mom)
 
     # Macro
@@ -411,7 +420,7 @@ def build_features(
     features_all = clip_outliers(features_all, raw_cols)
 
     # Add risk features
-    risk_feat = risk_features(returns_full, close_prices)
+    risk_feat = risk_features(returns_full, close_prices, price_panel)
     risk_model_df = features_all.join(risk_feat, how="inner")
     risk_rank = risk_feat.groupby(level="date").rank(pct=True)
     risk_rank.columns = [f"{c}_rank" for c in risk_rank.columns]

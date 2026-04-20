@@ -11,6 +11,8 @@ Usage:
 """
 
 import argparse
+import hashlib
+import json
 import pickle
 from pathlib import Path
 
@@ -38,6 +40,7 @@ from stock_data.dataset import (
     reshape_statements,
 )
 from stock_data.features import build_features
+from stock_data.dataset import build_returns_panel
 from stock_data.modeling.train import factor_benchmarks, walk_forward
 from stock_data.evaluation import (
     summarize_walk_forward,
@@ -53,6 +56,87 @@ INTERIM = Path("data/interim")
 PROCESSED = Path("data/processed")
 MODELS = Path("models")
 FIGURES = Path("reports/figures")
+
+
+def _validate_interim():
+    """Fail fast if interim data is missing or corrupt."""
+    required_files = [
+        "features_raw.parquet", "bs_raw.parquet", "cf_raw.parquet",
+        "annual_raw.parquet", "close_prices.parquet", "macro_df.parquet",
+        "sp500_membership.parquet",
+    ]
+    for f in required_files:
+        p = INTERIM / f
+        if not p.exists():
+            raise FileNotFoundError(f"Missing interim file: {p}")
+
+    features_raw = pd.read_parquet(INTERIM / "features_raw.parquet")
+    n_rows = len(features_raw)
+    if n_rows < 1000:
+        raise ValueError(f"Interim features_raw has only {n_rows} rows (expected >1000)")
+
+    n_symbols = features_raw.index.get_level_values("symbol").nunique()
+    if n_symbols < 100:
+        raise ValueError(f"Only {n_symbols} symbols in interim data (expected >100)")
+
+    dates = features_raw.index.get_level_values("date")
+    span_days = (dates.max() - dates.min()).days
+    if span_days < 365:
+        raise ValueError(f"Date span is only {span_days} days (expected >365)")
+
+    nan_frac = features_raw.isna().mean().mean()
+    if nan_frac > 0.8:
+        raise ValueError(f"Interim data is {nan_frac:.0%} NaN (exceeds 80% threshold)")
+
+    print(f"  Interim validation passed: {n_rows:,} rows, {n_symbols} symbols, "
+          f"{span_days}d span, {nan_frac:.1%} NaN")
+
+
+def _validate_processed():
+    """Fail fast if processed data is missing or corrupt."""
+    rmd_path = PROCESSED / "risk_model_df.parquet"
+    cols_path = PROCESSED / "feature_cols.json"
+    if not rmd_path.exists():
+        raise FileNotFoundError(f"Missing processed file: {rmd_path}")
+    if not cols_path.exists():
+        raise FileNotFoundError(f"Missing processed file: {cols_path}")
+
+    rmd = pd.read_parquet(rmd_path)
+    if len(rmd) < 500:
+        raise ValueError(f"risk_model_df has only {len(rmd)} rows (expected >500)")
+    if "next_q_return" not in rmd.columns:
+        raise ValueError("risk_model_df missing 'next_q_return' column")
+    if "realized_vol" not in rmd.columns:
+        raise ValueError("risk_model_df missing 'realized_vol' column")
+
+    print(f"  Processed validation passed: {len(rmd):,} rows, "
+          f"{rmd.columns.size} columns")
+
+
+def _compute_fingerprint(directory: Path) -> str:
+    """SHA-256 fingerprint of all parquet files in a directory."""
+    h = hashlib.sha256()
+    for p in sorted(directory.glob("*.parquet")):
+        h.update(p.name.encode())
+        h.update(str(p.stat().st_size).encode())
+        h.update(str(int(p.stat().st_mtime)).encode())
+    return h.hexdigest()[:16]
+
+
+def _save_fingerprint(directory: Path):
+    fp = _compute_fingerprint(directory)
+    meta = {"fingerprint": fp, "files": [p.name for p in sorted(directory.glob("*.parquet"))]}
+    (directory / ".fingerprint.json").write_text(json.dumps(meta))
+    return fp
+
+
+def _check_fingerprint(directory: Path) -> bool:
+    """Return True if current files match saved fingerprint."""
+    fp_file = directory / ".fingerprint.json"
+    if not fp_file.exists():
+        return False
+    saved = json.loads(fp_file.read_text())
+    return saved.get("fingerprint") == _compute_fingerprint(directory)
 
 
 def stage_data():
@@ -84,7 +168,7 @@ def stage_data():
     min_date = all_dates.min() - pd.Timedelta(days=400)
     max_date = all_dates.max() + pd.Timedelta(days=120)
 
-    close_prices = download_prices(inc_symbols, min_date, max_date)
+    close_prices, failed_symbols = download_prices(inc_symbols, min_date, max_date)
     macro_df = download_macro(min_date, max_date)
 
     # Save interim data
@@ -95,12 +179,16 @@ def stage_data():
     close_prices.to_parquet(INTERIM / "close_prices.parquet")
     macro_df.to_parquet(INTERIM / "macro_df.parquet")
     sp500.to_parquet(INTERIM / "sp500_membership.parquet")
-    print(f"  Interim data saved to {INTERIM}/")
+    fp = _save_fingerprint(INTERIM)
+    print(f"  Interim data saved to {INTERIM}/ (fingerprint: {fp})")
 
 
 def stage_features():
     """Build features from interim data and save processed parquet files."""
     PROCESSED.mkdir(parents=True, exist_ok=True)
+    _validate_interim()
+    if not _check_fingerprint(INTERIM):
+        print("  ⚠ WARNING: interim data fingerprint mismatch — files may be stale or modified")
 
     # Load interim data
     features_raw = pd.read_parquet(INTERIM / "features_raw.parquet")
@@ -120,9 +208,11 @@ def stage_features():
     returns_full = returns_df.merge(vol_df, on=["symbol", "date"], how="inner")
 
     # ── 5. Build features ──
+    price_panel = build_returns_panel(close_prices)
     risk_model_df, feature_cols = build_features(
         features_raw, bs_raw, cf_raw, annual_raw,
         close_prices, macro_df, returns_df, returns_full,
+        price_panel=price_panel,
     )
 
     # ── 5b. Point-in-time universe filter (removes survivorship bias) ──
@@ -134,20 +224,22 @@ def stage_features():
 
     # Save processed data
     risk_model_df.to_parquet(PROCESSED / "risk_model_df.parquet")
-    with open(PROCESSED / "feature_cols.pkl", "wb") as f:
-        pickle.dump(feature_cols, f)
-    print(f"  Processed data saved to {PROCESSED}/")
+    with open(PROCESSED / "feature_cols.json", "w") as f:
+        json.dump(feature_cols, f)
+    fp = _save_fingerprint(PROCESSED)
+    print(f"  Processed data saved to {PROCESSED}/ (fingerprint: {fp})")
 
 
 def stage_train():
     """Run walk-forward backtest, evaluate, and save model outputs."""
     MODELS.mkdir(parents=True, exist_ok=True)
     FIGURES.mkdir(parents=True, exist_ok=True)
+    _validate_processed()
 
     # Load processed data
     risk_model_df = pd.read_parquet(PROCESSED / "risk_model_df.parquet")
-    with open(PROCESSED / "feature_cols.pkl", "rb") as f:
-        feature_cols = pickle.load(f)
+    with open(PROCESSED / "feature_cols.json") as f:
+        feature_cols = json.load(f)
     close_prices = pd.read_parquet(INTERIM / "close_prices.parquet")
 
     # ── 6. Walk-forward backtest ──
