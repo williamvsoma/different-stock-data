@@ -11,6 +11,8 @@ Usage:
 """
 
 import argparse
+import hashlib
+import json
 import pickle
 from pathlib import Path
 
@@ -110,6 +112,32 @@ def _validate_processed():
           f"{rmd.columns.size} columns")
 
 
+def _compute_fingerprint(directory: Path) -> str:
+    """SHA-256 fingerprint of all parquet files in a directory."""
+    h = hashlib.sha256()
+    for p in sorted(directory.glob("*.parquet")):
+        h.update(p.name.encode())
+        h.update(str(p.stat().st_size).encode())
+        h.update(str(int(p.stat().st_mtime)).encode())
+    return h.hexdigest()[:16]
+
+
+def _save_fingerprint(directory: Path):
+    fp = _compute_fingerprint(directory)
+    meta = {"fingerprint": fp, "files": [p.name for p in sorted(directory.glob("*.parquet"))]}
+    (directory / ".fingerprint.json").write_text(json.dumps(meta))
+    return fp
+
+
+def _check_fingerprint(directory: Path) -> bool:
+    """Return True if current files match saved fingerprint."""
+    fp_file = directory / ".fingerprint.json"
+    if not fp_file.exists():
+        return False
+    saved = json.loads(fp_file.read_text())
+    return saved.get("fingerprint") == _compute_fingerprint(directory)
+
+
 def stage_data():
     """Download raw data and save interim parquet files."""
     INTERIM.mkdir(parents=True, exist_ok=True)
@@ -150,13 +178,16 @@ def stage_data():
     close_prices.to_parquet(INTERIM / "close_prices.parquet")
     macro_df.to_parquet(INTERIM / "macro_df.parquet")
     sp500.to_parquet(INTERIM / "sp500_membership.parquet")
-    print(f"  Interim data saved to {INTERIM}/")
+    fp = _save_fingerprint(INTERIM)
+    print(f"  Interim data saved to {INTERIM}/ (fingerprint: {fp})")
 
 
 def stage_features():
     """Build features from interim data and save processed parquet files."""
     PROCESSED.mkdir(parents=True, exist_ok=True)
     _validate_interim()
+    if not _check_fingerprint(INTERIM):
+        print("  ⚠ WARNING: interim data fingerprint mismatch — files may be stale or modified")
 
     # Load interim data
     features_raw = pd.read_parquet(INTERIM / "features_raw.parquet")
@@ -192,7 +223,8 @@ def stage_features():
     risk_model_df.to_parquet(PROCESSED / "risk_model_df.parquet")
     with open(PROCESSED / "feature_cols.pkl", "wb") as f:
         pickle.dump(feature_cols, f)
-    print(f"  Processed data saved to {PROCESSED}/")
+    fp = _save_fingerprint(PROCESSED)
+    print(f"  Processed data saved to {PROCESSED}/ (fingerprint: {fp})")
 
 
 def stage_train():
