@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.feature_selection import f_regression
+from sklearn.feature_selection import f_regression, mutual_info_regression
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
@@ -27,6 +27,7 @@ from stock_data.modeling.predict import (
     mv_optimize,
     mv_optimize_diag,
     portfolio_turnover,
+    rank_transform_mu,
     safe_spearmanr,
     select_vol_estimate,
     shrink_to_mean,
@@ -38,12 +39,9 @@ def _select_features(Xtr, ytr, threshold=0.3):
     """Select features when dimensionality ratio is too high.
 
     When ``n_features / n_samples <= threshold`` all columns are returned.
-    Otherwise keeps the top-N features ranked by univariate F-statistic
-    against the target (``f_regression``), where
-    ``N = floor(n_samples * threshold)``.
-
-    Uses F-statistic rather than variance so that rank features with bounded
-    spread are not penalised relative to raw magnitude features.
+    Otherwise keeps the top-N features using a blended score of
+    F-statistic (linear) and mutual information (nonlinear), capturing
+    both linear and nonlinear dependencies.
     """
     n_samples, n_features = Xtr.shape
     if n_features <= 1 or n_features / n_samples <= threshold:
@@ -51,16 +49,24 @@ def _select_features(Xtr, ytr, threshold=0.3):
 
     n_keep = max(1, int(n_samples * threshold))
 
-    # Impute NaNs with column medians before computing F-statistics.
-    # keep_empty_features=True retains all-NaN columns as constant zero vectors
-    # (SimpleImputer fills them with 0 when no observed value exists), which
-    # produces F-score = 0 so they rank last and are not selected.
     imp = SimpleImputer(strategy="median", keep_empty_features=True)
     X_imp = imp.fit_transform(Xtr)
 
+    # Linear: F-statistic
     f_scores, _ = f_regression(X_imp, ytr)
     f_scores = pd.Series(f_scores, index=Xtr.columns).fillna(0)
-    return f_scores.nlargest(n_keep).index.tolist()
+    f_ranks = f_scores.rank(pct=True)
+
+    # Nonlinear: mutual information (needs ≥3 samples for k-NN)
+    if n_samples >= 3:
+        mi_scores = mutual_info_regression(X_imp, ytr, random_state=42)
+        mi_scores = pd.Series(mi_scores, index=Xtr.columns).fillna(0)
+        mi_ranks = mi_scores.rank(pct=True)
+        blended = 0.5 * f_ranks + 0.5 * mi_ranks
+    else:
+        blended = f_ranks
+
+    return blended.nlargest(n_keep).index.tolist()
 
 
 # ── Shared helpers (used by walk_forward and evaluation.py) ────────────────────
@@ -82,8 +88,14 @@ def fit_ensemble(Xtr_sel, Xte_sel, ytr_r, ens_weights=None):
     if ens_weights is None:
         ens_weights = ENS_W
 
-    xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
-    xgb_m.fit(Xtr_sel, ytr_r, verbose=0)
+    xgb_m = xgb.XGBRegressor(**XGB_PARAMS, early_stopping_rounds=20)
+    # Use last 20% of training data as validation for early stopping
+    n_val = max(1, int(len(Xtr_sel) * 0.2))
+    Xtr_fit, Xval = Xtr_sel.iloc[:-n_val], Xtr_sel.iloc[-n_val:]
+    ytr_fit, yval = ytr_r.iloc[:-n_val], ytr_r.iloc[-n_val:]
+    xgb_m.fit(
+        Xtr_fit, ytr_fit, eval_set=[(Xval, yval)], verbose=0,
+    )
     p_xgb = xgb_m.predict(Xte_sel)
 
     imp = SimpleImputer(strategy="median")
@@ -137,6 +149,9 @@ def build_covariance(test_syms, buy_dt, close_prices, cfg):
 def optimize_portfolio(p_ret, p_vol, hist_vol_for_diag, cov_mat, cov_syms, test_syms, cfg):
     """MV optimize with full cov or diagonal fallback.
 
+    When LW covariance is available, rescales the correlation matrix using
+    ML vol predictions for more accurate forward-looking risk estimates.
+
     Returns (w, opt_syms, used_lw).
     """
     used_lw = False
@@ -147,8 +162,21 @@ def optimize_portfolio(p_ret, p_vol, hist_vol_for_diag, cov_mat, cov_syms, test_
             ci = {s: i for i, s in enumerate(cov_syms)}
             kt = [ti[s] for s in both]
             kc = [ci[s] for s in both]
+
+            # Rescale LW cov with ML vol predictions (#73):
+            # cov_rescaled = D_ml @ corr(LW) @ D_ml
+            lw_sub = cov_mat[np.ix_(kc, kc)]
+            lw_diag = np.sqrt(np.diag(lw_sub))
+            # Convert to correlation, guarding against zero-vol assets
+            safe_diag = np.where(lw_diag > 0, lw_diag, 1.0)
+            corr = lw_sub / np.outer(safe_diag, safe_diag)
+            np.fill_diagonal(corr, 1.0)
+
+            ml_vol = np.maximum(p_vol[kt], VOL_FLOOR) / 2.0  # annualized → quarterly
+            rescaled_cov = corr * np.outer(ml_vol, ml_vol)
+
             w = mv_optimize(
-                p_ret[kt], cov_mat[np.ix_(kc, kc)],
+                p_ret[kt], rescaled_cov,
                 cfg["max_weight"], cfg["risk_aversion"],
             )
             return w, both, True
@@ -252,6 +280,8 @@ def optimize_from_predictions(predictions, close_prices, cfg=None):
         td = pred["test_date"]
         p_ens = pred["p_ens"]
         p_ret = shrink_to_mean(winsorize(p_ens, cfg["winsor_pct"]), cfg["shrinkage_alpha"])
+        if cfg.get("use_rank_mu", False):
+            p_ret = rank_transform_mu(p_ret)
         p_vol = pred["p_vol"]
         hist_vol_for_diag = pred["hist_vol_for_diag"]
         test_syms = pred["test_syms"]

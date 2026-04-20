@@ -19,6 +19,17 @@ def shrink_to_mean(a, alpha=0.5):
     return alpha * a + (1 - alpha) * np.mean(a)
 
 
+def rank_transform_mu(a):
+    """Convert return predictions to percentile ranks for optimizer input.
+
+    Produces uniform [0,1] values that decouple shrinkage_alpha from
+    risk_aversion in MV optimization.
+    """
+    from scipy.stats import rankdata
+    ranks = rankdata(a, method="average")
+    return (ranks - 1) / max(len(ranks) - 1, 1)
+
+
 def ledoit_wolf_cov(symbols, buy_date, close_prices, lookback=252):
     """Compute Ledoit-Wolf quarterly covariance from daily returns.
 
@@ -279,24 +290,27 @@ def power_analysis_quarters(excess_mean, excess_std, alpha=0.05, power=0.80):
 
 
 def block_bootstrap_ci(vals, block_size=4, n_boot=10_000, seed=42):
-    """Block bootstrap CI preserving autocorrelation in quarterly returns.
+    """Circular block bootstrap CI preserving autocorrelation in quarterly returns.
 
-    Uses non-overlapping blocks of `block_size` quarters.
+    Uses circular wrapping so all observations are included regardless of
+    whether len(vals) is divisible by block_size.
     Returns ``(lo, hi, p_neg, boot_means)``.
     """
     rng = np.random.RandomState(seed)
     n = len(vals)
     if n < block_size:
-        # Fall back to i.i.d. bootstrap
         return bootstrap_ci(vals, n_boot, seed)
 
-    n_blocks = n // block_size
-    blocks = [vals[i * block_size:(i + 1) * block_size] for i in range(n_blocks)]
+    # Circular: extend vals by wrapping
+    extended = np.concatenate([vals, vals[:block_size - 1]])
+    n_blocks_needed = int(np.ceil(n / block_size))
 
-    means = np.array([
-        np.mean(np.concatenate([blocks[i] for i in rng.randint(0, len(blocks), size=n_blocks)]))
-        for _ in range(n_boot)
-    ])
+    means = np.empty(n_boot)
+    for b in range(n_boot):
+        starts = rng.randint(0, n, size=n_blocks_needed)
+        sample = np.concatenate([extended[s:s + block_size] for s in starts])[:n]
+        means[b] = sample.mean()
+
     lo, hi = np.percentile(means, [2.5, 97.5])
     p_neg = np.mean(means <= 0)
     return lo, hi, p_neg, means

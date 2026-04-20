@@ -27,6 +27,7 @@ PROD_CFG = {
     "max_train_q": 20,
     "feat_ratio_threshold": 0.3,
     "embargo_q": 1,  # drop N most recent training quarters to prevent feature-holding overlap
+    "use_rank_mu": True,  # use rank-based mu to decouple shrinkage from risk_aversion
 }
 
 XGB_PARAMS = {
@@ -70,7 +71,7 @@ XGB_VOL_PARAMS = {
 VOL_FLOOR = 0.05  # minimum annualised vol
 VOL_RC_GATE = 0.10  # below this RC, fall back to hist_vol_3m
 
-ENS_W = {"xgb": 0.5, "ridge": 0.25, "rf": 0.25}
+ENS_W = {"xgb": 0.67, "ridge": 0.0, "rf": 0.33}  # exp_21: Ridge hurts IC by ~19%
 
 # ── Simulation ─────────────────────────────────────────────────────────────────
 
