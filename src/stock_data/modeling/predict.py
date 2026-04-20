@@ -178,3 +178,48 @@ def compute_spx_return(buy_date, sell_date, close_prices):
     if len(spx) < 5:
         return np.nan
     return spx["close"].iloc[-1] / spx["close"].iloc[0] - 1
+
+
+def mv_optimize_turnover(mu, cov, max_w, lam, prev_w, max_turnover):
+    """Mean-variance optimization with turnover constraint.
+
+    Adds constraint: sum(|w_new - w_old|) / 2 <= max_turnover.
+    Uses linear reformulation with auxiliary vars to keep SLSQP-compatible.
+    """
+    n = len(mu)
+    if prev_w is None:
+        prev_w = np.ones(n) / n
+
+    # Augmented variable: x = [w, t+, t-] where w_new - w_old = t+ - t-
+    # turnover = sum(t+ + t-) / 2
+    n_aug = 3 * n
+
+    def obj(x):
+        w = x[:n]
+        return -(w @ mu - lam * (w @ cov @ w))
+
+    def jac_obj(x):
+        w = x[:n]
+        g = np.zeros(n_aug)
+        g[:n] = -(mu - 2 * lam * (cov @ w))
+        return g
+
+    cons = [
+        # sum(w) = 1
+        {"type": "eq", "fun": lambda x: x[:n].sum() - 1.0},
+        # w - prev_w = t+ - t-
+        {"type": "eq", "fun": lambda x: x[:n] - prev_w - x[n:2*n] + x[2*n:]},
+        # turnover: sum(t+ + t-) / 2 <= max_turnover
+        {"type": "ineq", "fun": lambda x: max_turnover - (x[n:2*n].sum() + x[2*n:].sum()) / 2},
+    ]
+    bds = [(0, max_w)] * n + [(0, 1.0)] * (2 * n)
+    x0 = np.concatenate([np.ones(n) / n, np.zeros(2 * n)])
+
+    r = minimize(obj, x0, jac=jac_obj, method="SLSQP", bounds=bds,
+                 constraints=cons, options={"maxiter": 2000, "ftol": 1e-12})
+    if not r.success:
+        print(f"    ⚠ Turnover-constrained optimizer failed ({r.message}), using equal-weight fallback")
+        return np.ones(n) / n
+    w = np.maximum(r.x[:n], 0)
+    w = np.minimum(w, max_w)
+    return w / w.sum()
