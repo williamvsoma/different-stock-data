@@ -17,6 +17,8 @@ for noisy financial data and deserve more weight. Equal weights may suffice.
 | equal | 0.33 | 0.33 | 0.33 | ensemble |
 | ridge_heavy | 0.25 | 0.50 | 0.25 | ensemble |
 | no_xgb | 0.00 | 0.50 | 0.50 | ensemble |
+| no_ridge 67/0/33 | 0.67 | 0.00 | 0.33 | ensemble |
+| no_ridge 50/0/50 | 0.50 | 0.00 | 0.50 | ensemble |
 | adaptive | RC-based | RC-based | RC-based | dynamic |
 | xgb_solo | 1.00 | — | — | ablation |
 | ridge_solo | — | 1.00 | — | ablation |
@@ -97,14 +99,31 @@ Note: t-stats with N=2 are unreliable but direction is consistent.
 - Per-model IC may change with more data
 - Results conditional on current feature set and regularisation
 
+## Follow-up: Dropping Ridge Entirely
+
+Given Ridge's weak IC (0.071), tested removing it and redistributing weight:
+
+| Variant | Excess (net) | IR | Sharpe | IC |
+|---------|-------------|-----|--------|------|
+| baseline 50/25/25 | +6.49% | 10.09 | 96.07 | 0.1469 |
+| **no_ridge 67/0/33** | **+7.57%** | **29.30** | 28.77 | **0.1753** |
+| no_ridge 50/0/50 | +6.53% | 10.86 | 75.03 | 0.1821 |
+
+**Dropping Ridge improves signal quality substantially** (IC +19% to +24%).
+Excess return increases +1.1pp. The 67/0/33 split has best IR.
+
+However: Sharpe drops (96→29) indicating more quarter-to-quarter variance.
+Ridge may act as portfolio stabiliser despite poor IC — its predictions smooth
+the ensemble, reducing position concentration.
+
 ## Decision
 
-**Keep 50/25/25.** It is the empirically best allocation. Rationale:
-- Wins on IR, Sharpe, and risk-adjusted excess
-- Theoretically justified: XGB has best signal consistency
-- Ensemble clearly outperforms any solo model (diversification benefit)
-- Adaptive weights premature with 2 quarters of OOS data
+**Keep 50/25/25 for now** but flag 67/0/33 as strong candidate. Rationale:
+- Baseline wins on Sharpe (return consistency)
+- No-Ridge wins on IC and excess return (signal quality)
+- N=2 → cannot distinguish "Ridge stabilises" from "luck"
+- Dropping Ridge is easy to implement (zero-cost to revert)
 
-**Future action:** Re-run with ≥8 test quarters. If RF IC remains highest,
-consider 40/20/40 as alternative. Adaptive weights become viable with longer
-backtest history.
+**Recommended next step:** When ≥8 test quarters available, re-run.
+If no-Ridge still wins on IC and excess, switch to 67/0/33.
+Keep Ridge model trained regardless (zero cost, insurance against regime change).
