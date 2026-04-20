@@ -46,7 +46,16 @@ def ledoit_wolf_cov(symbols, buy_date, close_prices, lookback=252):
 
     try:
         lw = LedoitWolf().fit(mat.values)
-        return lw.covariance_ * 63, syms  # quarterly scale
+        daily_cov = lw.covariance_
+        # Correlation decomposition: Σ_q = D_q C D_q where D_q = D_d * sqrt(63)
+        # Mathematically equivalent to * 63 with LW's own vols; enables
+        # future drop-in replacement of D_q with EWMA/GARCH/predicted vols.
+        d = np.sqrt(np.diag(daily_cov))          # daily std
+        d[d == 0] = 1e-10                          # guard division
+        corr = daily_cov / np.outer(d, d)          # correlation matrix
+        np.fill_diagonal(corr, 1.0)                # numerical cleanup
+        dq = d * np.sqrt(63)                        # quarterly std
+        return np.outer(dq, dq) * corr, syms       # quarterly covariance
     except Exception:
         return None, syms
 

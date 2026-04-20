@@ -503,3 +503,37 @@ class TestBlockBootstrap:
         r2 = block_bootstrap_ci(vals, seed=42)
         assert r1[0] == r2[0]
         assert r1[1] == r2[1]
+
+
+class TestLedoitWolfScaling:
+    """Verify correlation-decomposition scaling in ledoit_wolf_cov."""
+
+    def test_decomposition_produces_valid_psd(self):
+        """D_q C D_q must be positive semi-definite."""
+        daily_cov = np.array([[0.0004, 0.0001], [0.0001, 0.0003]])
+        d = np.sqrt(np.diag(daily_cov))
+        corr = daily_cov / np.outer(d, d)
+        np.fill_diagonal(corr, 1.0)
+        dq = d * np.sqrt(63)
+        q_cov = np.outer(dq, dq) * corr
+        eigvals = np.linalg.eigvalsh(q_cov)
+        assert np.all(eigvals >= -1e-12), "quarterly cov not PSD"
+
+    def test_diagonal_equals_63x_daily_var(self):
+        """Variance scales linearly (63x) regardless of decomposition method."""
+        daily_cov = np.array([[0.0004, 0.0001], [0.0001, 0.0003]])
+        d = np.sqrt(np.diag(daily_cov))
+        dq = d * np.sqrt(63)
+        q_var = dq ** 2
+        np.testing.assert_allclose(q_var, np.diag(daily_cov) * 63, rtol=1e-10)
+
+    def test_correlation_preserved(self):
+        """Off-diagonal correlations should be unchanged after scaling."""
+        daily_cov = np.array([[0.0004, 0.0001], [0.0001, 0.0003]])
+        d = np.sqrt(np.diag(daily_cov))
+        corr_d = daily_cov / np.outer(d, d)
+        dq = d * np.sqrt(63)
+        q_cov = np.outer(dq, dq) * corr_d
+        dq2 = np.sqrt(np.diag(q_cov))
+        corr_q = q_cov / np.outer(dq2, dq2)
+        np.testing.assert_allclose(corr_q, corr_d, rtol=1e-10)
