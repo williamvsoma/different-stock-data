@@ -171,12 +171,13 @@ def multi_source_fi(xgb_m, ridge_m, rf_m, feature_cols, ridge_cols=None):
     else:
         fi["rf_impurity"] = 0.0
 
-    # Combined: equal-weight average of normalised importances
+    # Combined: equal-weight average of normalised importances (active models only)
     for col in ["xgb_gain", "ridge_coef", "rf_impurity"]:
         s = fi[col].sum()
         if s > 0:
             fi[col] = fi[col] / s
-    fi["combined"] = fi[["xgb_gain", "ridge_coef", "rf_impurity"]].mean(axis=1)
+    active_cols = [c for c in ["xgb_gain", "ridge_coef", "rf_impurity"] if fi[c].sum() > 0]
+    fi["combined"] = fi[active_cols].mean(axis=1) if active_cols else 0.0
 
     return fi
 

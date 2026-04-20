@@ -99,7 +99,7 @@ def fit_ensemble(Xtr_sel, Xte_sel, ytr_r, ens_weights=None):
     p_xgb = xgb_m.predict(Xte_sel)
 
     imp = SimpleImputer(strategy="median")
-    Xtr_imp = imp.fit_transform(Xtr_sel)
+    Xtr_imp = imp.fit_transform(Xtr_fit)
     Xte_imp = imp.transform(Xte_sel)
 
     sc = StandardScaler()
@@ -108,13 +108,13 @@ def fit_ensemble(Xtr_sel, Xte_sel, ytr_r, ens_weights=None):
 
     ridge_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
     if ens_weights.get("ridge", 0) > 0:
-        ridge_m.fit(Xtr_s, ytr_r)
+        ridge_m.fit(Xtr_s, ytr_fit)
         p_rdg = ridge_m.predict(Xte_s)
     else:
         p_rdg = np.zeros(len(Xte_sel))
 
     rf_m = RandomForestRegressor(**RF_PARAMS)
-    rf_m.fit(Xtr_imp, ytr_r)
+    rf_m.fit(Xtr_imp, ytr_fit)
     p_rf = rf_m.predict(Xte_imp)
 
     p_ens = (ens_weights.get("xgb", 0) * p_xgb
@@ -330,7 +330,7 @@ def optimize_from_predictions(predictions, close_prices, cfg=None):
             port_ret = w @ act_ret
 
         mkt_ret = act_ret.mean()
-        sell_dt = td + pd.DateOffset(months=3) + pd.Timedelta(days=EARNINGS_LAG_DAYS)
+        sell_dt = buy_dt + pd.DateOffset(months=3)
         spx_ret = compute_spx_return(buy_dt, sell_dt, close_prices)
 
         to = (portfolio_turnover(prev_w, prev_s, w, opt_syms)
