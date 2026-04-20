@@ -117,33 +117,6 @@ def bootstrap_ci(vals, n_boot=10_000, seed=42):
     return lo, hi, p_neg, means
 
 
-def compute_adaptive_weights(rc_history, floor=0.10):
-    """Compute ensemble weights from recent OOS rank correlations.
-
-    ``rc_history`` is a list of dicts ``{"xgb": rc, "ridge": rc, "rf": rc}``.
-    Weights are proportional to mean(max(rc, 0))^2 per model, floored at
-    ``floor`` and renormalised to sum to 1.
-    """
-    if not rc_history:
-        return {"xgb": 1 / 3, "ridge": 1 / 3, "rf": 1 / 3}
-
-    models = ["xgb", "ridge", "rf"]
-    scores = {}
-    for m in models:
-        vals = [h[m] for h in rc_history if np.isfinite(h.get(m, np.nan))]
-        # Use mean of positive RCs squared — rewards consistent signal
-        mean_rc = np.mean([max(v, 0) for v in vals]) if vals else 0.0
-        scores[m] = mean_rc ** 2 + 1e-8  # epsilon avoids all-zero
-
-    total = sum(scores.values())
-    raw = {m: scores[m] / total for m in models}
-
-    # Apply floor and renormalise
-    floored = {m: max(raw[m], floor) for m in models}
-    s = sum(floored.values())
-    return {m: floored[m] / s for m in models}
-
-
 def compute_spx_return(buy_date, sell_date, close_prices):
     """Compute S&P 500 (^GSPC) return between buy_date and sell_date.
 
