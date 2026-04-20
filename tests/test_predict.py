@@ -385,3 +385,59 @@ class TestMvOptimizeTurnover:
         mu, cov, max_w, _ = self._simple_case()
         w = mv_optimize_turnover(mu, cov, max_w, lam=1.0, prev_w=None, max_turnover=0.5)
         assert w.sum() == pytest.approx(1.0, abs=1e-4)
+
+
+# ── select_vol_estimate ────────────────────────────────────────────────────────
+
+from stock_data.modeling.predict import select_vol_estimate
+
+
+class TestSelectVolEstimate:
+    def test_uses_hist_vol_when_rc_below_gate(self):
+        """When ML model RC is below gate, should return hist_vol (clamped)."""
+        p_vol_ml = np.array([0.20, 0.25, 0.30])
+        p_vol_naive = np.array([0.10, 0.12, 0.15])
+        result = select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train=0.05,
+                                     vol_rc_gate=0.10, vol_floor=0.05)
+        np.testing.assert_array_equal(result, p_vol_naive)
+
+    def test_uses_ml_vol_when_rc_above_gate(self):
+        """When ML model RC is above gate, should return ML predictions."""
+        p_vol_ml = np.array([0.20, 0.25, 0.30])
+        p_vol_naive = np.array([0.10, 0.12, 0.15])
+        result = select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train=0.50,
+                                     vol_rc_gate=0.10, vol_floor=0.05)
+        np.testing.assert_array_equal(result, p_vol_ml)
+
+    def test_uses_ml_vol_when_naive_is_none(self):
+        """When hist_vol_3m unavailable, should use ML regardless of RC."""
+        p_vol_ml = np.array([0.20, 0.25, 0.30])
+        result = select_vol_estimate(p_vol_ml, None, vol_rc_train=0.01,
+                                     vol_rc_gate=0.10, vol_floor=0.05)
+        np.testing.assert_array_equal(result, p_vol_ml)
+
+    def test_uses_ml_vol_when_rc_is_nan(self):
+        """When RC is NaN (insufficient data), should use ML."""
+        p_vol_ml = np.array([0.20, 0.25, 0.30])
+        p_vol_naive = np.array([0.10, 0.12, 0.15])
+        result = select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train=np.nan,
+                                     vol_rc_gate=0.10, vol_floor=0.05)
+        np.testing.assert_array_equal(result, p_vol_ml)
+
+    def test_floor_applied_to_naive_vol(self):
+        """Naive vol below floor should be clamped up."""
+        p_vol_ml = np.array([0.20, 0.25])
+        p_vol_naive = np.array([0.01, 0.15])  # 0.01 < floor
+        result = select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train=0.05,
+                                     vol_rc_gate=0.10, vol_floor=0.05)
+        assert result[0] == 0.05
+        assert result[1] == 0.15
+
+    def test_nan_in_naive_replaced_with_ml_mean(self):
+        """NaN in naive vol should be replaced with ML mean, then floored."""
+        p_vol_ml = np.array([0.20, 0.30])
+        p_vol_naive = np.array([np.nan, 0.15])
+        result = select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train=0.05,
+                                     vol_rc_gate=0.10, vol_floor=0.05)
+        assert result[0] == pytest.approx(0.25)  # mean of [0.20, 0.30]
+        assert result[1] == 0.15

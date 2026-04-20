@@ -223,3 +223,15 @@ def mv_optimize_turnover(mu, cov, max_w, lam, prev_w, max_turnover):
     w = np.maximum(r.x[:n], 0)
     w = np.minimum(w, max_w)
     return w / w.sum()
+
+
+def select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train, vol_rc_gate, vol_floor):
+    """Select between ML vol predictions and naive hist_vol based on quality gate.
+
+    Falls back to hist_vol_3m when ML model rank correlation is below gate threshold.
+    """
+    if (p_vol_naive is not None
+            and np.isfinite(vol_rc_train)
+            and vol_rc_train < vol_rc_gate):
+        return np.maximum(np.nan_to_num(p_vol_naive, nan=p_vol_ml.mean()), vol_floor)
+    return p_vol_ml

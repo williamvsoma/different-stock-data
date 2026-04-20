@@ -15,7 +15,10 @@ from stock_data.config import (
     PROD_CFG,
     RF_PARAMS,
     RIDGE_PARAMS,
+    VOL_FLOOR,
+    VOL_RC_GATE,
     XGB_PARAMS,
+    XGB_VOL_PARAMS,
 )
 from stock_data.modeling.predict import (
     compute_spx_return,
@@ -25,6 +28,7 @@ from stock_data.modeling.predict import (
     mv_optimize_diag,
     portfolio_turnover,
     safe_spearmanr,
+    select_vol_estimate,
     shrink_to_mean,
     winsorize,
 )
@@ -142,9 +146,18 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         })
 
         # ── Volatility model ──
-        vol_m = xgb.XGBRegressor(**XGB_PARAMS)
+        # ── Volatility model (separate hyperparams) ──
+        vol_m = xgb.XGBRegressor(**XGB_VOL_PARAMS)
         vol_m.fit(Xtr_sel, ytr_v, verbose=0)
-        p_vol = np.maximum(vol_m.predict(Xte_sel), 0.05)
+        p_vol_ml = np.maximum(vol_m.predict(Xte_sel), VOL_FLOOR)
+
+        # Quality gate: if ML vol model is weak on training set, fall back to hist_vol_3m
+        p_vol_naive = Xte_sel["hist_vol_3m"].values if "hist_vol_3m" in Xte_sel.columns else None
+        vol_rc_train = safe_spearmanr(vol_m.predict(Xtr_sel), ytr_v) if len(ytr_v) >= 10 else np.nan
+        p_vol = select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train, VOL_RC_GATE, VOL_FLOOR)
+
+        # For diagonal fallback, use historical vol (not predicted forward vol)
+        hist_vol_for_diag = Xte_sel["hist_vol_3m"].values if "hist_vol_3m" in Xte_sel.columns else p_vol
 
         # ── Covariance ──
         test_syms = Xte.index.get_level_values("symbol").tolist()
@@ -173,8 +186,9 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
                 used_lw = True
 
         if not used_lw:
+            diag_vol = np.maximum(np.nan_to_num(hist_vol_for_diag, nan=0.20), VOL_FLOOR)
             w = mv_optimize_diag(
-                p_ret, p_vol, cfg["max_weight"], cfg["risk_aversion"],
+                p_ret, diag_vol, cfg["max_weight"], cfg["risk_aversion"],
             )
             port_ret = w @ act_ret
             opt_syms = test_syms
