@@ -184,6 +184,9 @@ def annual_growth_features(feat, annual_raw) -> pd.DataFrame:
         aq = ann_growth[ann_growth["symbol"] == sym].sort_values("date")
         if len(aq) == 0:
             continue
+        # Normalize datetime resolution for pandas 3.x merge_asof compatibility
+        fq["date"] = fq["date"].astype("datetime64[ns]")
+        aq["date"] = aq["date"].astype("datetime64[ns]")
         m = pd.merge_asof(
             fq, aq.drop(columns="symbol"), on="date",
             direction="backward", tolerance=pd.Timedelta(days=400),
