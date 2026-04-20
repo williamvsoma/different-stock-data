@@ -26,6 +26,7 @@ PROD_CFG = {
     "cov_lookback_days": 252,
     "max_train_q": 20,
     "feat_ratio_threshold": 0.3,
+    "embargo_q": 1,  # drop N most recent training quarters to prevent feature-holding overlap
 }
 
 XGB_PARAMS = {

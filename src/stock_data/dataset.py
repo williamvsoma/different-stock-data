@@ -252,7 +252,7 @@ def compute_forward_returns(close_prices, sym_date_pairs) -> pd.DataFrame:
                 buy_date:buy_date + pd.Timedelta(days=10), "close"
             ]
             sell_w = grp.loc[
-                sell_date - pd.Timedelta(days=5):sell_date + pd.Timedelta(days=5), "close"
+                sell_date:sell_date + pd.Timedelta(days=10), "close"
             ]
             if len(buy_w) > 0 and len(sell_w) > 0:
                 ret = sell_w.iloc[0] / buy_w.iloc[0] - 1

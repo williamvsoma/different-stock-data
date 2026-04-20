@@ -177,16 +177,18 @@ def bootstrap_ci(vals, n_boot=10_000, seed=42):
 def compute_spx_return(buy_date, sell_date, close_prices):
     """Compute S&P 500 (^GSPC) return between buy_date and sell_date.
 
+    Uses the same price-selection convention as strategy returns:
+    first available close on or after each target date.
     Returns the total return or np.nan if data is insufficient.
     """
     spx = close_prices[
         (close_prices["symbol"] == "^GSPC")
-        & (close_prices["date"] >= buy_date)
-        & (close_prices["date"] <= sell_date)
     ].sort_values("date")
-    if len(spx) < 5:
+    buy_w = spx[spx["date"] >= buy_date]["close"]
+    sell_w = spx[spx["date"] >= sell_date]["close"]
+    if len(buy_w) == 0 or len(sell_w) == 0:
         return np.nan
-    return spx["close"].iloc[-1] / spx["close"].iloc[0] - 1
+    return sell_w.iloc[0] / buy_w.iloc[0] - 1
 
 
 def mv_optimize_turnover(mu, cov, max_w, lam, prev_w, max_turnover):

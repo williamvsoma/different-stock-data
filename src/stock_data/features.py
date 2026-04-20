@@ -92,7 +92,8 @@ def balance_sheet_features(features_raw, bs_raw) -> pd.DataFrame:
 
     feat["roe"] = ni / total_equity.replace(0, np.nan)
     feat["roa"] = ni / total_assets.replace(0, np.nan)
-    feat["roic"] = ebit / (total_equity + total_debt).replace(0, np.nan)
+    invested_capital = (total_equity.fillna(0) + total_debt.fillna(0) - cash.fillna(0)).replace(0, np.nan)
+    feat["roic"] = ebit / invested_capital
     feat["debt_to_equity"] = total_debt / total_equity.replace(0, np.nan)
     feat["debt_to_assets"] = total_debt / total_assets.replace(0, np.nan)
     feat["leverage_ratio"] = total_assets / total_equity.replace(0, np.nan)
@@ -308,9 +309,9 @@ def clip_outliers(features_all: pd.DataFrame, raw_cols, n_std=5):
 
 def risk_features(returns_full, close_prices) -> pd.DataFrame:
     """Historical vol, beta, drawdown, and higher moments (no lookahead)."""
-    mkt_pivot = close_prices.pivot(index="date", columns="symbol", values="close")
-    mkt_mean = mkt_pivot.mean(axis=1)
-    mkt_daily_ret = mkt_mean.pct_change().dropna()
+    # Use ^GSPC (S&P 500 index) as market proxy for proper CAPM beta
+    spx_prices = close_prices[close_prices["symbol"] == "^GSPC"].set_index("date").sort_index()
+    mkt_daily_ret = spx_prices["close"].pct_change().dropna()
 
     # Pre-group by symbol: O(n) instead of O(n_pairs * n_prices) filtering
     grouped = {

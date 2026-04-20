@@ -92,6 +92,12 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
     for td in unique_dates:
         tr_dates = [d for d in unique_dates if d < td]
 
+        # Embargo: drop the most recent N training quarters to prevent
+        # feature lookback overlapping with prior holding periods (#75)
+        embargo_q = cfg.get("embargo_q", 0)
+        if embargo_q > 0 and len(tr_dates) > embargo_q:
+            tr_dates = tr_dates[:-embargo_q]
+
         max_q = cfg.get("max_train_q")
         if max_q and len(tr_dates) > max_q:
             tr_dates = tr_dates[-max_q:]
