@@ -441,3 +441,65 @@ class TestSelectVolEstimate:
                                      vol_rc_gate=0.10, vol_floor=0.05)
         assert result[0] == pytest.approx(0.25)  # mean of [0.20, 0.30]
         assert result[1] == 0.15
+
+
+class TestPowerAnalysis:
+    """Tests for power_analysis_quarters."""
+
+    def test_returns_positive_int(self):
+        from stock_data.modeling.predict import power_analysis_quarters
+        n = power_analysis_quarters(0.02, 0.05)
+        assert isinstance(n, int)
+        assert n > 0
+
+    def test_larger_effect_needs_fewer_quarters(self):
+        from stock_data.modeling.predict import power_analysis_quarters
+        n_small = power_analysis_quarters(0.01, 0.05)
+        n_big = power_analysis_quarters(0.05, 0.05)
+        assert n_big < n_small
+
+    def test_higher_vol_needs_more_quarters(self):
+        from stock_data.modeling.predict import power_analysis_quarters
+        n_lo = power_analysis_quarters(0.02, 0.03)
+        n_hi = power_analysis_quarters(0.02, 0.10)
+        assert n_hi > n_lo
+
+    def test_zero_mean_returns_large(self):
+        from stock_data.modeling.predict import power_analysis_quarters
+        n = power_analysis_quarters(0.0, 0.05)
+        assert n >= 9999
+
+
+class TestBlockBootstrap:
+    """Tests for block_bootstrap_ci."""
+
+    def test_returns_four_tuple(self):
+        from stock_data.modeling.predict import block_bootstrap_ci
+        vals = [0.01, 0.02, -0.01, 0.03, 0.01, 0.02, -0.005, 0.015]
+        lo, hi, p, dist = block_bootstrap_ci(vals, block_size=4, n_boot=500, seed=42)
+        assert lo < hi
+        assert 0.0 <= p <= 1.0
+        assert len(dist) == 500
+
+    def test_all_positive_p_near_zero(self):
+        from stock_data.modeling.predict import block_bootstrap_ci
+        vals = [0.05] * 12
+        lo, hi, p, _ = block_bootstrap_ci(vals, block_size=4, n_boot=1000, seed=7)
+        assert p < 0.05
+        assert lo > 0
+
+    def test_fallback_iid_when_short(self):
+        """When n < block_size, falls back to iid resampling."""
+        from stock_data.modeling.predict import block_bootstrap_ci
+        vals = [0.01, 0.02, -0.01]
+        lo, hi, p, dist = block_bootstrap_ci(vals, block_size=4, n_boot=200, seed=99)
+        assert lo < hi
+        assert len(dist) == 200
+
+    def test_seed_reproducibility(self):
+        from stock_data.modeling.predict import block_bootstrap_ci
+        vals = [0.01, -0.02, 0.03, 0.01, -0.01, 0.02, 0.0, 0.015]
+        r1 = block_bootstrap_ci(vals, seed=42)
+        r2 = block_bootstrap_ci(vals, seed=42)
+        assert r1[0] == r2[0]
+        assert r1[1] == r2[1]
