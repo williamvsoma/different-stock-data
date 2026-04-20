@@ -63,11 +63,112 @@ def _select_features(Xtr, ytr, threshold=0.3):
     return f_scores.nlargest(n_keep).index.tolist()
 
 
-def walk_forward(risk_model_df, feature_cols_all, close_prices):
+# ── Shared helpers (used by walk_forward and evaluation.py) ────────────────────
+
+
+def fit_ensemble(Xtr_sel, Xte_sel, ytr_r, ens_weights=None):
+    """Fit XGB/Ridge/RF ensemble and return predictions + models.
+
+    Parameters
+    ----------
+    Xtr_sel, Xte_sel : DataFrames with selected features
+    ytr_r : training return targets
+    ens_weights : dict like {"xgb": 0.5, "ridge": 0.25, "rf": 0.25}
+
+    Returns
+    -------
+    (p_ens, p_xgb, p_rdg, p_rf, models) where models = (xgb_m, ridge_m, rf_m)
+    """
+    if ens_weights is None:
+        ens_weights = ENS_W
+
+    xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
+    xgb_m.fit(Xtr_sel, ytr_r, verbose=0)
+    p_xgb = xgb_m.predict(Xte_sel)
+
+    imp = SimpleImputer(strategy="median")
+    Xtr_imp = imp.fit_transform(Xtr_sel)
+    Xte_imp = imp.transform(Xte_sel)
+
+    sc = StandardScaler()
+    Xtr_s = sc.fit_transform(Xtr_imp)
+    Xte_s = sc.transform(Xte_imp)
+
+    ridge_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
+    if ens_weights.get("ridge", 0) > 0:
+        ridge_m.fit(Xtr_s, ytr_r)
+        p_rdg = ridge_m.predict(Xte_s)
+    else:
+        p_rdg = np.zeros(len(Xte_sel))
+
+    rf_m = RandomForestRegressor(**RF_PARAMS)
+    rf_m.fit(Xtr_imp, ytr_r)
+    p_rf = rf_m.predict(Xte_imp)
+
+    p_ens = (ens_weights.get("xgb", 0) * p_xgb
+             + ens_weights.get("ridge", 0) * p_rdg
+             + ens_weights.get("rf", 0) * p_rf)
+
+    return p_ens, p_xgb, p_rdg, p_rf, (xgb_m, ridge_m, rf_m)
+
+
+def fit_vol_model(Xtr_sel, Xte_sel, ytr_v):
+    """Fit XGBoost vol model with quality gate.
+
+    Returns (p_vol, vol_rc_train, hist_vol_for_diag).
+    """
+    vol_m = xgb.XGBRegressor(**XGB_VOL_PARAMS)
+    vol_m.fit(Xtr_sel, ytr_v, verbose=0)
+    p_vol_ml = np.maximum(vol_m.predict(Xte_sel), VOL_FLOOR)
+
+    p_vol_naive = Xte_sel["hist_vol_3m"].values if "hist_vol_3m" in Xte_sel.columns else None
+    vol_rc_train = safe_spearmanr(vol_m.predict(Xtr_sel), ytr_v) if len(ytr_v) >= 10 else np.nan
+    p_vol = select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train, VOL_RC_GATE, VOL_FLOOR)
+
+    hist_vol_for_diag = Xte_sel["hist_vol_3m"].values if "hist_vol_3m" in Xte_sel.columns else p_vol
+    return p_vol, vol_rc_train, hist_vol_for_diag
+
+
+def build_covariance(test_syms, buy_dt, close_prices, cfg):
+    """Compute Ledoit-Wolf covariance or return None for diagonal fallback."""
+    return ledoit_wolf_cov(test_syms, buy_dt, close_prices, cfg["cov_lookback_days"])
+
+
+def optimize_portfolio(p_ret, p_vol, hist_vol_for_diag, cov_mat, cov_syms, test_syms, cfg):
+    """MV optimize with full cov or diagonal fallback.
+
+    Returns (w, opt_syms, used_lw).
+    """
+    used_lw = False
+    if cov_mat is not None:
+        both = [s for s in test_syms if s in cov_syms]
+        if len(both) >= cfg["min_test_stocks"]:
+            ti = {s: i for i, s in enumerate(test_syms)}
+            ci = {s: i for i, s in enumerate(cov_syms)}
+            kt = [ti[s] for s in both]
+            kc = [ci[s] for s in both]
+            w = mv_optimize(
+                p_ret[kt], cov_mat[np.ix_(kc, kc)],
+                cfg["max_weight"], cfg["risk_aversion"],
+            )
+            return w, both, True
+
+    diag_vol = np.maximum(np.nan_to_num(hist_vol_for_diag, nan=0.20), VOL_FLOOR)
+    w = mv_optimize_diag(p_ret, diag_vol, cfg["max_weight"], cfg["risk_aversion"])
+    return w, test_syms, False
+
+
+def walk_forward(risk_model_df, feature_cols_all, close_prices, cfg=None,
+                 ens_weights=None):
     """Run the production walk-forward engine.
 
     Returns ``(prod_df, prod_fi, prod_weights_history)``.
     """
+    if cfg is None:
+        cfg = PROD_CFG
+    if ens_weights is None:
+        ens_weights = ENS_W
+
     X_p = risk_model_df[feature_cols_all].copy()
     y_ret = risk_model_df["next_q_return"].copy()
     y_vol = risk_model_df["realized_vol"].copy()
@@ -82,8 +183,6 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
     results = []
     fi_list = []
     weights_history = {}
-
-    cfg = PROD_CFG
 
     print("=" * 80)
     print("WALK-FORWARD ENGINE")
@@ -113,95 +212,40 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         if len(Xtr) < cfg["min_train_rows"] or len(Xte) < cfg["min_test_stocks"]:
             continue
 
-        # ── Feature selection for high-dimensionality regimes ──
+        # ── Feature selection ──
         sel_cols = _select_features(Xtr, ytr_r, cfg["feat_ratio_threshold"])
-        Xtr_sel = Xtr[sel_cols]
-        Xte_sel = Xte[sel_cols]
+        Xtr_sel, Xte_sel = Xtr[sel_cols], Xte[sel_cols]
 
-        # ── Ensemble return predictions ──
-        xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
-        xgb_m.fit(Xtr_sel, ytr_r, verbose=0)
-        p_xgb = xgb_m.predict(Xte_sel)
-
-        imp = SimpleImputer(strategy="median")
-        Xtr_imp = imp.fit_transform(Xtr_sel)
-        Xte_imp = imp.transform(Xte_sel)
-
-        sc = StandardScaler()
-        Xtr_s = sc.fit_transform(Xtr_imp)
-        Xte_s = sc.transform(Xte_imp)
-        ridge_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
-        ridge_m.fit(Xtr_s, ytr_r)
-        p_rdg = ridge_m.predict(Xte_s)
-
-        rf_m = RandomForestRegressor(**RF_PARAMS)
-        rf_m.fit(Xtr_imp, ytr_r)
-        p_rf = rf_m.predict(Xte_imp)
-
-        p_ens = ENS_W["xgb"] * p_xgb + ENS_W["ridge"] * p_rdg + ENS_W["rf"] * p_rf
-        p_ret = shrink_to_mean(
-            winsorize(p_ens, cfg["winsor_pct"]),
-            cfg["shrinkage_alpha"],
+        # ── Ensemble predictions ──
+        p_ens, p_xgb, p_rdg, p_rf, (xgb_m, ridge_m, rf_m) = fit_ensemble(
+            Xtr_sel, Xte_sel, ytr_r, ens_weights,
         )
+        p_ret = shrink_to_mean(winsorize(p_ens, cfg["winsor_pct"]), cfg["shrinkage_alpha"])
 
         fi_df = multi_source_fi(xgb_m, ridge_m, rf_m, feature_cols_all, sel_cols)
-        fi_list.append({
-            "date": td,
-            "fi": fi_df["combined"],
-            "fi_detail": fi_df,
-        })
+        fi_list.append({"date": td, "fi": fi_df["combined"], "fi_detail": fi_df})
 
-        # ── Volatility model ──
-        # ── Volatility model (separate hyperparams) ──
-        vol_m = xgb.XGBRegressor(**XGB_VOL_PARAMS)
-        vol_m.fit(Xtr_sel, ytr_v, verbose=0)
-        p_vol_ml = np.maximum(vol_m.predict(Xte_sel), VOL_FLOOR)
+        # ── Vol model ──
+        p_vol, vol_rc_train, hist_vol_for_diag = fit_vol_model(Xtr_sel, Xte_sel, ytr_v)
 
-        # Quality gate: if ML vol model is weak on training set, fall back to hist_vol_3m
-        p_vol_naive = Xte_sel["hist_vol_3m"].values if "hist_vol_3m" in Xte_sel.columns else None
-        vol_rc_train = safe_spearmanr(vol_m.predict(Xtr_sel), ytr_v) if len(ytr_v) >= 10 else np.nan
-        p_vol = select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train, VOL_RC_GATE, VOL_FLOOR)
-
-        # For diagonal fallback, use historical vol (not predicted forward vol)
-        hist_vol_for_diag = Xte_sel["hist_vol_3m"].values if "hist_vol_3m" in Xte_sel.columns else p_vol
-
-        # ── Covariance ──
+        # ── Covariance & optimization ──
         test_syms = Xte.index.get_level_values("symbol").tolist()
         buy_dt = td + pd.Timedelta(days=EARNINGS_LAG_DAYS)
-        cov_mat, cov_syms = ledoit_wolf_cov(
-            test_syms, buy_dt, close_prices, cfg["cov_lookback_days"],
+        cov_mat, cov_syms = build_covariance(test_syms, buy_dt, close_prices, cfg)
+        w, opt_syms, used_lw = optimize_portfolio(
+            p_ret, p_vol, hist_vol_for_diag, cov_mat, cov_syms, test_syms, cfg,
         )
 
         act_ret = risk_model_df.loc[Xte.index, "next_q_return"].values
         act_vol = risk_model_df.loc[Xte.index, "realized_vol"].values
-
-        used_lw = False
-        if cov_mat is not None:
-            both = [s for s in test_syms if s in cov_syms]
-            if len(both) >= cfg["min_test_stocks"]:
-                ti = {s: i for i, s in enumerate(test_syms)}
-                ci = {s: i for i, s in enumerate(cov_syms)}
-                kt = [ti[s] for s in both]
-                kc = [ci[s] for s in both]
-                w = mv_optimize(
-                    p_ret[kt], cov_mat[np.ix_(kc, kc)],
-                    cfg["max_weight"], cfg["risk_aversion"],
-                )
-                port_ret = w @ act_ret[kt]
-                opt_syms = both
-                used_lw = True
-
-        if not used_lw:
-            diag_vol = np.maximum(np.nan_to_num(hist_vol_for_diag, nan=0.20), VOL_FLOOR)
-            w = mv_optimize_diag(
-                p_ret, diag_vol, cfg["max_weight"], cfg["risk_aversion"],
-            )
+        if used_lw:
+            ti = {s: i for i, s in enumerate(test_syms)}
+            kt = [ti[s] for s in opt_syms]
+            port_ret = w @ act_ret[kt]
+        else:
             port_ret = w @ act_ret
-            opt_syms = test_syms
 
         mkt_ret = act_ret.mean()
-
-        # S&P 500 cap-weighted benchmark
         sell_dt = td + pd.DateOffset(months=3) + pd.Timedelta(days=EARNINGS_LAG_DAYS)
         spx_ret = compute_spx_return(buy_dt, sell_dt, close_prices)
 

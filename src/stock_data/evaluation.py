@@ -9,17 +9,13 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.stats import spearmanr, pearsonr
-import xgboost as xgb
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge
-from sklearn.ensemble import RandomForestRegressor
 
 from stock_data.config import (
     EARNINGS_LAG_DAYS, ENS_W, PROD_CFG, XGB_PARAMS, RIDGE_PARAMS, RF_PARAMS,
     COST_BPS, WEIGHT_THRESHOLD, N_BOOT,
 )
 from stock_data.modeling.predict import bootstrap_ci, block_bootstrap_ci, power_analysis_quarters, safe_spearmanr
+from stock_data.modeling.train import fit_ensemble
 
 
 # ── Walk-forward summary ───────────────────────────────────────────────────────
@@ -552,21 +548,7 @@ def run_iteration_analysis(
                     continue
                 Xtr_raw = X_p.loc[tr_m, stable_feat]
                 Xte_raw = X_p.loc[te_m, stable_feat]
-                # XGBoost handles NaN natively (matches train.py)
-                xgb_m = xgb.XGBRegressor(**XGB_PARAMS)
-                xgb_m.fit(Xtr_raw, y_ret_p[tr_m], verbose=0)
-                # Ridge and RF get median-imputed + scaled data
-                imp = SimpleImputer(strategy="median")
-                sc = StandardScaler()
-                X_tr_n = sc.fit_transform(imp.fit_transform(Xtr_raw.values))
-                X_te_n = sc.transform(imp.transform(Xte_raw.values))
-                rdg_m = Ridge(alpha=RIDGE_PARAMS["alpha"])
-                rdg_m.fit(X_tr_n, y_ret_p[tr_m])
-                rf_m = RandomForestRegressor(**RF_PARAMS)
-                rf_m.fit(X_tr_n, y_ret_p[tr_m])
-                p_ens = (ENS_W["xgb"] * xgb_m.predict(Xte_raw)
-                         + ENS_W["ridge"] * rdg_m.predict(X_te_n)
-                         + ENS_W["rf"] * rf_m.predict(X_te_n))
+                p_ens, _, _, _, _ = fit_ensemble(Xtr_raw, Xte_raw, y_ret_p[tr_m])
                 rrc, _ = spearmanr(p_ens, y_ret_p[te_m])
                 stable_results.append({
                     "quarter": td, "ret_rc_stable": rrc, "ret_rc_full": row["ret_rc"],
