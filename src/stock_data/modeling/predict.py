@@ -154,5 +154,9 @@ def mv_optimize_turnover(mu, cov, max_w, lam, prev_w, max_turnover):
 
     r = minimize(obj, x0, jac=jac_obj, method="SLSQP", bounds=bds,
                  constraints=cons, options={"maxiter": 2000, "ftol": 1e-12})
-    w = np.maximum(r.x[:n] if r.success else np.ones(n) / n, 0)
+    if not r.success:
+        print(f"    ⚠ Turnover-constrained optimizer failed ({r.message}), using equal-weight fallback")
+        return np.ones(n) / n
+    w = np.maximum(r.x[:n], 0)
+    w = np.minimum(w, max_w)
     return w / w.sum()
