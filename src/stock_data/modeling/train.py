@@ -222,7 +222,11 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
 
 
 def factor_benchmarks(risk_model_df, feature_cols_all, prod_df):
-    """Compare production MV against simple single-factor strategies."""
+    """Compare production MV against simple single-factor strategies.
+
+    Factor portfolios now track turnover and apply transaction costs
+    for fair comparison with the MV strategy.
+    """
     factor_defs = {
         "Low Vol":       {"col": "hist_vol_6m",   "ascending": True},
         "Momentum (3m)": {"col": "momentum_3m",   "ascending": False},
@@ -236,6 +240,7 @@ def factor_benchmarks(risk_model_df, feature_cols_all, prod_df):
     cfg = PROD_CFG
 
     factor_results = {name: [] for name in factor_defs}
+    prev_held = {name: set() for name in factor_defs}
 
     for td in unique_dates:
         tr_dates = [d for d in unique_dates if d < td]
@@ -247,6 +252,7 @@ def factor_benchmarks(risk_model_df, feature_cols_all, prod_df):
 
         te_idx = X_p[te_mask].index
         act_rets = risk_model_df.loc[te_idx, "next_q_return"].values
+        syms = te_idx.get_level_values("symbol").values
         mkt = act_rets.mean()
 
         for fname, fdef in factor_defs.items():
@@ -263,9 +269,26 @@ def factor_benchmarks(risk_model_df, feature_cols_all, prod_df):
             pick_idx = (sorted_idx[:n_pick] if fdef["ascending"]
                         else sorted_idx[-n_pick:])
             port_ret = act_rets[pick_idx].mean()
+
+            # Estimate turnover from held-set changes (equal-weight)
+            cur_held = set(syms[pick_idx])
+            if prev_held[fname]:
+                n_old = len(prev_held[fname])
+                n_new = len(cur_held)
+                n_common = len(cur_held & prev_held[fname])
+                turnover = 1.0 - n_common / max(n_old, n_new)
+            else:
+                turnover = 1.0
+            prev_held[fname] = cur_held
+
+            txc = turnover * cfg["cost_bps"] / 10000
             factor_results[fname].append({
                 "test_date": td, "port_ret": port_ret,
-                "mkt_ret": mkt, "excess": port_ret - mkt, "n_held": n_pick,
+                "net_ret": port_ret - txc,
+                "mkt_ret": mkt, "excess": port_ret - mkt,
+                "excess_net": port_ret - txc - mkt,
+                "turnover": turnover, "tx_cost": txc,
+                "n_held": n_pick,
             })
 
     return factor_results
