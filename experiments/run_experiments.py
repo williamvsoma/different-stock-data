@@ -63,6 +63,9 @@ def run_walk_forward(
     vol_rc_gate=None,
     tree_cols=None,
     ridge_feature_cols=None,
+    shrinkage_alpha=None,
+    winsor_pct=None,
+    reverse_shrink_order=False,
     label="baseline",
 ):
     """Run walk-forward and return per-quarter results DataFrame.
@@ -145,7 +148,12 @@ def run_walk_forward(
             ew = ens_weights
 
         p_ens = ew["xgb"] * p_xgb + ew["ridge"] * p_rdg + ew["rf"] * p_rf
-        p_ret = shrink_to_mean(winsorize(p_ens, cfg["winsor_pct"]), cfg["shrinkage_alpha"])
+        s_a = shrinkage_alpha if shrinkage_alpha is not None else cfg["shrinkage_alpha"]
+        w_p = winsor_pct if winsor_pct is not None else cfg["winsor_pct"]
+        if reverse_shrink_order:
+            p_ret = winsorize(shrink_to_mean(p_ens, s_a), w_p)
+        else:
+            p_ret = shrink_to_mean(winsorize(p_ens, w_p), s_a)
 
         # ── Vol model ──
         vol_m = xgb.XGBRegressor(**vol_params)
@@ -451,6 +459,44 @@ def experiment_24_turnover_tight():
     )
 
 
+def experiment_26_shrinkage_sweep():
+    """Issue #26: Sweep shrinkage_alpha in {0.0, 0.25, 0.5, 0.75, 1.0}."""
+    runs = []
+    for alpha in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        print(f"\n>>> EXP #26: shrinkage_alpha={alpha:.2f}")
+        df = run_walk_forward(
+            risk_model_df, feature_cols_all, close_prices, PROD_CFG,
+            shrinkage_alpha=alpha,
+            label=f"shrink_{alpha:.2f}",
+        )
+        runs.append(df)
+    return runs
+
+
+def experiment_26_winsor_sweep():
+    """Issue #26: Sweep winsor_pct in {0.01, 0.02, 0.05, 0.10, 0.20}."""
+    runs = []
+    for wpct in [0.01, 0.02, 0.05, 0.10, 0.20]:
+        print(f"\n>>> EXP #26: winsor_pct={wpct:.2f}")
+        df = run_walk_forward(
+            risk_model_df, feature_cols_all, close_prices, PROD_CFG,
+            winsor_pct=wpct,
+            label=f"winsor_{wpct:.2f}",
+        )
+        runs.append(df)
+    return runs
+
+
+def experiment_26_reverse_order():
+    """Issue #26: Reversed order — shrink THEN winsorize (vs baseline winsorize THEN shrink)."""
+    print("\n>>> EXP #26: Reversed order (shrink→winsorize) at default params")
+    return run_walk_forward(
+        risk_model_df, feature_cols_all, close_prices, PROD_CFG,
+        reverse_shrink_order=True,
+        label="shrink_then_winsor",
+    )
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -491,6 +537,25 @@ if __name__ == "__main__":
 
     print_comparison([baseline, all_results["model_specific"],
                       all_results["raw_only"], all_results["rank_only"]])
+
+    # Issue #26: Shrinkage/winsor sweep
+    print("\n" + "=" * 100)
+    print("EXPERIMENT GROUP: Issue #26 — Shrinkage & Winsorization Sweep")
+    print("=" * 100)
+
+    shrink_runs = experiment_26_shrinkage_sweep()
+    for run in shrink_runs:
+        all_results[run["label"].iloc[0]] = run
+    print_comparison([baseline] + shrink_runs)
+
+    winsor_runs = experiment_26_winsor_sweep()
+    for run in winsor_runs:
+        all_results[run["label"].iloc[0]] = run
+    print_comparison([baseline] + winsor_runs)
+
+    reverse_run = experiment_26_reverse_order()
+    all_results["shrink_then_winsor"] = reverse_run
+    print_comparison([baseline, reverse_run])
 
     # Per-quarter detail for adaptive weights
     print("\n" + "=" * 100)
