@@ -22,9 +22,16 @@ from stock_data.modeling.train import fit_ensemble
 
 
 def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
-    """Print production walk-forward summary with feature importance stability."""
+    """Print production walk-forward summary with feature importance stability.
+
+    Also exports prod_df to CSV in reports/ for downstream analysis.
+    """
     ex_g = prod_df["gross_ret"] - prod_df["mkt_ret"]
     ex_n = prod_df["net_ret"] - prod_df["mkt_ret"]
+
+    # IC standard errors
+    ic_mean = prod_df["ret_rc"].mean()
+    ic_se = prod_df["ret_rc"].std() / np.sqrt(len(prod_df)) if len(prod_df) > 1 else np.nan
 
     print(f"\n{'='*80}")
     print(f"PRODUCTION RESULTS ({len(prod_df)} quarters)")
@@ -42,6 +49,8 @@ def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
         ("Avg turnover (one-way)",  f"{prod_df['turnover'].mean():.0%}"),
         ("Avg tx cost",             f"{prod_df['tx_cost'].mean():.2%}"),
         ("Ledoit-Wolf used",        f"{prod_df['used_lw'].sum()}/{len(prod_df)}"),
+        ("Mean IC (ret_rc)",        f"{ic_mean:.3f} ± {ic_se:.3f}"),
+        ("N features",              f"{len(feature_cols_all)}"),
     ]
     if "spx_ret" in prod_df.columns and prod_df["spx_ret"].notna().any():
         spx_valid = prod_df[prod_df["spx_ret"].notna()]
@@ -104,6 +113,30 @@ def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
             print(f"    Avg turnover:       {sub['turnover'].mean():.0%}")
             print(f"    Avg holdings:       {sub['n_held'].mean():.0f}")
             print()
+
+    # CSV export for downstream analysis
+    from pathlib import Path
+    reports_dir = Path("reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = reports_dir / "walk_forward_results.csv"
+    prod_df.to_csv(csv_path, index=False)
+    print(f"  Results exported to {csv_path}")
+
+    # Return structured metrics for programmatic access
+    return {
+        "n_quarters": len(prod_df),
+        "avg_gross_ret": prod_df["gross_ret"].mean(),
+        "avg_net_ret": prod_df["net_ret"].mean(),
+        "avg_mkt_ret": prod_df["mkt_ret"].mean(),
+        "avg_excess_gross": ex_g.mean(),
+        "avg_excess_net": ex_n.mean(),
+        "win_rate": (ex_n > 0).mean(),
+        "avg_holdings": prod_df["n_held"].mean(),
+        "avg_turnover": prod_df["turnover"].mean(),
+        "ic_mean": ic_mean,
+        "ic_se": ic_se,
+        "n_features": len(feature_cols_all),
+    }
 
 
 # ── Factor benchmarks + bootstrap ─────────────────────────────────────────────

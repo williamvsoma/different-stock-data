@@ -164,11 +164,22 @@ def reshape_annual_income(annual_dict: dict) -> pd.DataFrame:
 # ── Price data ─────────────────────────────────────────────────────────────────
 
 
-def download_prices(symbols, start, end) -> tuple[pd.DataFrame, list[str]]:
+def download_prices(symbols, start, end, existing_prices=None) -> tuple[pd.DataFrame, list[str]]:
     """Download daily close prices and return (tidy DataFrame, failed_symbols).
+
+    If ``existing_prices`` is provided, only downloads data after the latest
+    date in the existing dataset (incremental mode).
 
     Raises RuntimeError if >10% of symbols fail to download.
     """
+    if existing_prices is not None and len(existing_prices) > 0:
+        latest = existing_prices["date"].max()
+        if latest >= end:
+            print(f"  Prices already up to date (latest: {latest.date()})")
+            return existing_prices, []
+        start = latest + pd.Timedelta(days=1)
+        print(f"  Incremental download from {start.date()} to {end.date()}")
+
     print(f"  Downloading daily prices for {len(symbols)} symbols "
           f"({start.date()} to {end.date()})...")
     # Include ^GSPC for cap-weighted benchmark
@@ -206,6 +217,13 @@ def download_prices(symbols, start, end) -> tuple[pd.DataFrame, list[str]]:
             f">{10}% of symbols failed price download: "
             f"{n_failed_stocks}/{n_requested} ({100-coverage_pct:.1f}%)"
         )
+
+    # Merge with existing data in incremental mode
+    if existing_prices is not None and len(existing_prices) > 0:
+        close = pd.concat([existing_prices, close], ignore_index=True)
+        close = close.drop_duplicates(subset=["symbol", "date"]).sort_values(["symbol", "date"])
+        print(f"  After merge: {len(close):,} total rows")
+
     return close, failed
 
 

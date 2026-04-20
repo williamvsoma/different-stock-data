@@ -5,7 +5,7 @@ Tests α ∈ {0.0, 0.25, 0.5, 0.75, 1.0} by re-running optimization only
 """
 import sys
 from pathlib import Path
-import pickle
+import json
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -20,8 +20,8 @@ INTERIM = DATA_DIR / "data" / "interim"
 
 def main():
     risk_model_df = pd.read_parquet(PROCESSED / "risk_model_df.parquet")
-    with open(PROCESSED / "feature_cols.pkl", "rb") as f:
-        feature_cols_all = pickle.load(f)
+    with open(PROCESSED / "feature_cols.json") as f:
+        feature_cols_all = json.load(f)
     close_prices = pd.read_parquet(INTERIM / "close_prices.parquet")
 
     # Train once

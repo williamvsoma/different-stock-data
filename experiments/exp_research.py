@@ -14,7 +14,7 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
-import pickle
+import json
 import numpy as np
 import pandas as pd
 
@@ -32,8 +32,8 @@ OUT_DIR = Path(__file__).parent
 
 def load_data():
     risk_model_df = pd.read_parquet(PROCESSED / "risk_model_df.parquet")
-    with open(PROCESSED / "feature_cols.pkl", "rb") as f:
-        feature_cols_all = pickle.load(f)
+    with open(PROCESSED / "feature_cols.json") as f:
+        feature_cols_all = json.load(f)
     close_prices = pd.read_parquet(INTERIM / "close_prices.parquet")
     return risk_model_df, feature_cols_all, close_prices
 

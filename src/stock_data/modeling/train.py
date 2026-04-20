@@ -187,16 +187,38 @@ def optimize_portfolio(p_ret, p_vol, hist_vol_for_diag, cov_mat, cov_syms, test_
 
 
 def predict_all_quarters(risk_model_df, feature_cols_all, close_prices,
-                         cfg=None, ens_weights=None):
+                         cfg=None, ens_weights=None, checkpoint_dir=None):
     """Run walk-forward prediction only (no optimization).
 
     Returns a list of per-quarter prediction dicts that can be passed to
     ``optimize_from_predictions()`` with different optimizer settings.
+
+    If ``checkpoint_dir`` is provided, saves predictions after each quarter
+    and resumes from the last checkpoint on restart.
     """
+    import pickle as _pkl
+    from pathlib import Path
+
     if cfg is None:
         cfg = PROD_CFG
     if ens_weights is None:
         ens_weights = ENS_W
+
+    # Checkpoint loading
+    predictions = []
+    fi_list = []
+    completed_dates = set()
+    if checkpoint_dir is not None:
+        checkpoint_dir = Path(checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_file = checkpoint_dir / "predictions_checkpoint.pkl"
+        if ckpt_file.exists():
+            with open(ckpt_file, "rb") as f:
+                saved = _pkl.load(f)
+            predictions = saved["predictions"]
+            fi_list = saved["fi_list"]
+            completed_dates = {p["test_date"] for p in predictions}
+            print(f"  Resumed from checkpoint: {len(predictions)} quarters done")
 
     X_p = risk_model_df[feature_cols_all].copy()
     y_ret = risk_model_df["next_q_return"].copy()
@@ -208,10 +230,10 @@ def predict_all_quarters(risk_model_df, feature_cols_all, close_prices,
     dp = X_p.index.get_level_values("date")
     unique_dates = sorted(dp.unique())
 
-    predictions = []
-    fi_list = []
-
     for td in unique_dates:
+        if td in completed_dates:
+            continue
+
         tr_dates = [d for d in unique_dates if d < td]
 
         embargo_q = cfg.get("embargo_q", 0)
@@ -258,6 +280,12 @@ def predict_all_quarters(risk_model_df, feature_cols_all, close_prices,
             "hist_vol_for_diag": hist_vol_for_diag,
             "act_ret": act_ret, "act_vol": act_vol,
         })
+
+        # Checkpoint save after each quarter
+        if checkpoint_dir is not None:
+            ckpt_file = checkpoint_dir / "predictions_checkpoint.pkl"
+            with open(ckpt_file, "wb") as f:
+                _pkl.dump({"predictions": predictions, "fi_list": fi_list}, f)
 
     return predictions, fi_list
 

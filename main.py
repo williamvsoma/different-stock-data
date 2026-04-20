@@ -95,7 +95,7 @@ def _validate_interim():
 def _validate_processed():
     """Fail fast if processed data is missing or corrupt."""
     rmd_path = PROCESSED / "risk_model_df.parquet"
-    cols_path = PROCESSED / "feature_cols.pkl"
+    cols_path = PROCESSED / "feature_cols.json"
     if not rmd_path.exists():
         raise FileNotFoundError(f"Missing processed file: {rmd_path}")
     if not cols_path.exists():
@@ -224,8 +224,8 @@ def stage_features():
 
     # Save processed data
     risk_model_df.to_parquet(PROCESSED / "risk_model_df.parquet")
-    with open(PROCESSED / "feature_cols.pkl", "wb") as f:
-        pickle.dump(feature_cols, f)
+    with open(PROCESSED / "feature_cols.json", "w") as f:
+        json.dump(feature_cols, f)
     fp = _save_fingerprint(PROCESSED)
     print(f"  Processed data saved to {PROCESSED}/ (fingerprint: {fp})")
 
@@ -238,8 +238,8 @@ def stage_train():
 
     # Load processed data
     risk_model_df = pd.read_parquet(PROCESSED / "risk_model_df.parquet")
-    with open(PROCESSED / "feature_cols.pkl", "rb") as f:
-        feature_cols = pickle.load(f)
+    with open(PROCESSED / "feature_cols.json") as f:
+        feature_cols = json.load(f)
     close_prices = pd.read_parquet(INTERIM / "close_prices.parquet")
 
     # ── 6. Walk-forward backtest ──

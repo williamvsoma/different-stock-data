@@ -5,7 +5,7 @@ without retraining. Optimizes for net Sharpe ratio.
 """
 import sys
 from pathlib import Path
-import pickle
+import json
 import itertools
 import pandas as pd
 
@@ -21,8 +21,8 @@ INTERIM = DATA_DIR / "data" / "interim"
 
 def main():
     risk_model_df = pd.read_parquet(PROCESSED / "risk_model_df.parquet")
-    with open(PROCESSED / "feature_cols.pkl", "rb") as f:
-        feature_cols_all = pickle.load(f)
+    with open(PROCESSED / "feature_cols.json") as f:
+        feature_cols_all = json.load(f)
     close_prices = pd.read_parquet(INTERIM / "close_prices.parquet")
 
     print("Training models (one-time)...")
