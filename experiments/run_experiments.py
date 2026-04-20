@@ -66,7 +66,9 @@ def run_walk_forward(
     shrinkage_alpha=None,
     winsor_pct=None,
     reverse_shrink_order=False,
+    permute_seed=None,
     label="baseline",
+    return_detail=False,
 ):
     """Run walk-forward and return per-quarter results DataFrame.
 
@@ -94,6 +96,7 @@ def run_walk_forward(
     prev_w, prev_s = None, None
     results = []
     rc_history = []
+    stock_detail = []
 
     for td in unique_dates:
         tr_dates = [d for d in unique_dates if d < td]
@@ -154,6 +157,11 @@ def run_walk_forward(
             p_ret = winsorize(shrink_to_mean(p_ens, s_a), w_p)
         else:
             p_ret = shrink_to_mean(winsorize(p_ens, w_p), s_a)
+
+        # Permutation test: shuffle cross-sectional ranking (null = random stock→prediction mapping)
+        if permute_seed is not None:
+            perm_rng = np.random.RandomState(permute_seed + int(td.timestamp()) % 10000)
+            p_ret = perm_rng.permutation(p_ret)
 
         # ── Vol model ──
         vol_m = xgb.XGBRegressor(**vol_params)
@@ -229,10 +237,20 @@ def run_walk_forward(
             "ens_w_xgb": ew.get("xgb", 0), "ens_w_ridge": ew.get("ridge", 0),
             "ens_w_rf": ew.get("rf", 0),
         })
+        if return_detail:
+            for i, sym in enumerate(test_syms):
+                stock_detail.append({
+                    "test_date": td, "symbol": sym,
+                    "pred_ret": float(p_ret[i]), "act_ret": float(act_ret[i]),
+                    "pred_vol": float(p_vol[i]) if i < len(p_vol) else np.nan,
+                    "act_vol": float(act_vol[i]),
+                })
         prev_w, prev_s = w, opt_syms
 
     df = pd.DataFrame(results)
     df["label"] = label
+    if return_detail:
+        return df, pd.DataFrame(stock_detail)
     return df
 
 
@@ -495,6 +513,186 @@ def experiment_26_reverse_order():
         reverse_shrink_order=True,
         label="shrink_then_winsor",
     )
+
+
+# ── Issue #31: Comprehensive robustness experiments ────────────────────────────
+
+def robustness_31_subperiod_stability(baseline_df):
+    """Split backtest into halves and compare metrics."""
+    print("\n>>> ROBUSTNESS #31.1: Subperiod Stability")
+    n = len(baseline_df)
+    if n < 2:
+        print("  ⚠ Only 1 quarter — cannot split into subperiods.")
+        return
+    mid = n // 2
+    first_half = baseline_df.iloc[:mid].copy()
+    second_half = baseline_df.iloc[mid:].copy()
+    first_half["label"] = "first_half"
+    second_half["label"] = "second_half"
+
+    s1 = summarise(first_half, "first_half")
+    s2 = summarise(second_half, "second_half")
+    sf = summarise(baseline_df, "full_sample")
+
+    print(f"  Full sample:  N={sf['n_quarters']}, excess={sf['avg_excess_net']:+.2%}, "
+          f"Sharpe={sf['sharpe_ann']:.2f}, IC={sf['avg_ret_rc']:.4f}")
+    print(f"  First half:   N={s1['n_quarters']}, excess={s1['avg_excess_net']:+.2%}, "
+          f"Sharpe={s1['sharpe_ann']:.2f}, IC={s1['avg_ret_rc']:.4f}")
+    print(f"  Second half:  N={s2['n_quarters']}, excess={s2['avg_excess_net']:+.2%}, "
+          f"Sharpe={s2['sharpe_ann']:.2f}, IC={s2['avg_ret_rc']:.4f}")
+
+    if s1["avg_excess_net"] * s2["avg_excess_net"] < 0:
+        print("  ⚠ SIGN REVERSAL between halves — alpha is likely spurious.")
+    else:
+        print("  ✓ Consistent sign across halves.")
+    return s1, s2
+
+
+def robustness_31_decile_analysis(stock_detail_df):
+    """Rank stocks by predicted return, report realized return by decile."""
+    print("\n>>> ROBUSTNESS #31.3: Prediction Decile Analysis")
+    if stock_detail_df.empty:
+        print("  No stock-level data.")
+        return
+
+    all_deciles = []
+    for td, grp in stock_detail_df.groupby("test_date"):
+        if len(grp) < 10:
+            continue
+        grp = grp.copy()
+        grp["decile"] = pd.qcut(grp["pred_ret"], 10, labels=False, duplicates="drop") + 1
+        for d, dg in grp.groupby("decile"):
+            all_deciles.append({"test_date": td, "decile": d, "avg_ret": dg["act_ret"].mean(), "n": len(dg)})
+
+    if not all_deciles:
+        print("  Insufficient data for decile analysis.")
+        return
+
+    dec_df = pd.DataFrame(all_deciles)
+    agg = dec_df.groupby("decile")["avg_ret"].agg(["mean", "std", "count"]).reset_index()
+    print(f"  {'Decile':>7s}  {'Avg Ret':>10s}  {'Std':>10s}  {'N quarters':>10s}")
+    print(f"  {'-------':>7s}  {'----------':>10s}  {'----------':>10s}  {'----------':>10s}")
+    for _, row in agg.iterrows():
+        print(f"  {int(row['decile']):7d}  {row['mean']:+10.2%}  {row['std']:10.2%}  {int(row['count']):10d}")
+
+    top = agg[agg["decile"] == agg["decile"].max()]["mean"].values[0]
+    bot = agg[agg["decile"] == agg["decile"].min()]["mean"].values[0]
+    spread = top - bot
+    print(f"\n  Long-short spread (D10 - D1): {spread:+.2%}")
+    if spread > 0:
+        print("  ✓ Monotonic spread — signal has content.")
+    else:
+        print("  ⚠ INVERTED spread — predicted top decile underperforms bottom.")
+    return agg
+
+
+def robustness_31_rolling_ic(baseline_df, window=4):
+    """Rolling average IC over a window of quarters."""
+    print(f"\n>>> ROBUSTNESS #31.4: Rolling IC (window={window} quarters)")
+    if len(baseline_df) < window:
+        print(f"  ⚠ Only {len(baseline_df)} quarters — need at least {window} for rolling IC.")
+        return
+
+    ic_series = baseline_df["ret_rc"].values
+    dates = baseline_df["test_date"].values
+    rolling = []
+    for i in range(window - 1, len(ic_series)):
+        avg_ic = np.mean(ic_series[i - window + 1:i + 1])
+        rolling.append({"end_date": dates[i], "rolling_ic": avg_ic})
+
+    rdf = pd.DataFrame(rolling)
+    print(f"  Rolling IC (last {min(len(rdf), 8)} points):")
+    for _, row in rdf.tail(8).iterrows():
+        d = pd.Timestamp(row["end_date"]).date()
+        print(f"    {d}: IC={row['rolling_ic']:.4f}")
+
+    if len(rdf) >= 2:
+        trend = np.polyfit(range(len(rdf)), rdf["rolling_ic"].values, 1)[0]
+        if trend > 0.01:
+            print("  Signal quality IMPROVING over time.")
+        elif trend < -0.01:
+            print("  ⚠ Signal quality DECAYING — possible overfitting to historical patterns.")
+        else:
+            print("  Signal quality STABLE.")
+    return rdf
+
+
+def robustness_31_param_sensitivity_grid():
+    """Run walk-forward over a parameter grid."""
+    print("\n>>> ROBUSTNESS #31.6: Parameter Sensitivity Grid")
+    grid = [
+        {"risk_aversion": ra, "max_weight": mw}
+        for ra in [0.5, 1.0, 2.0, 5.0]
+        for mw in [0.01, 0.02, 0.05]
+    ]
+    results = []
+    for params in grid:
+        cfg = PROD_CFG.copy()
+        cfg.update(params)
+        label = f"ra={params['risk_aversion']}_mw={params['max_weight']}"
+        print(f"  Running: {label}")
+        df = run_walk_forward(
+            risk_model_df, feature_cols_all, close_prices, cfg,
+            label=label,
+        )
+        s = summarise(df, label)
+        s["risk_aversion"] = params["risk_aversion"]
+        s["max_weight"] = params["max_weight"]
+        results.append(s)
+
+    rdf = pd.DataFrame(results)
+    print(f"\n  {'risk_aversion':>14s}  {'max_weight':>10s}  {'excess_net':>12s}  {'sharpe':>8s}  {'turnover':>10s}")
+    print(f"  {'-'*14:>14s}  {'-'*10:>10s}  {'-'*12:>12s}  {'-'*8:>8s}  {'-'*10:>10s}")
+    for _, row in rdf.iterrows():
+        print(f"  {row['risk_aversion']:14.1f}  {row['max_weight']:10.2f}  "
+              f"{row['avg_excess_net']:+12.2%}  {row['sharpe_ann']:8.2f}  {row['avg_turnover']:10.0%}")
+
+    excess_spread = rdf["avg_excess_net"].max() - rdf["avg_excess_net"].min()
+    if excess_spread > 0.10:
+        print(f"  ⚠ FRAGILE: excess range={excess_spread:.2%} across grid — alpha is parameter-sensitive.")
+    else:
+        print(f"  ✓ Robust: excess range={excess_spread:.2%} — stable across parameter choices.")
+    return rdf
+
+
+def robustness_31_permutation_test(n_perms=100):
+    """Proper permutation test: shuffle stock↔prediction mapping each quarter."""
+    print(f"\n>>> ROBUSTNESS #31.7: Permutation Test ({n_perms} shuffles)")
+
+    # Real baseline
+    real = run_walk_forward(
+        risk_model_df, feature_cols_all, close_prices, PROD_CFG,
+        label="real",
+    )
+    real_excess = (real["net_ret"] - real["mkt_ret"]).mean()
+
+    # Permuted: same predictions, random cross-sectional assignment
+    perm_excesses = []
+    for i in range(n_perms):
+        perm = run_walk_forward(
+            risk_model_df, feature_cols_all, close_prices, PROD_CFG,
+            permute_seed=i * 7 + 1,
+            label=f"perm_{i}",
+        )
+        perm_excess = (perm["net_ret"] - perm["mkt_ret"]).mean()
+        perm_excesses.append(perm_excess)
+        print(f"  Perm {i+1}/{n_perms}: excess={perm_excess:+.2%}")
+
+    perm_arr = np.array(perm_excesses)
+    p_value = np.mean(perm_arr >= real_excess)
+    print(f"\n  Real strategy excess: {real_excess:+.2%}")
+    print(f"  Permutations mean:    {perm_arr.mean():+.2%}")
+    print(f"  Permutations std:     {perm_arr.std():.2%}")
+    print(f"  P-value (perm >= real): {p_value:.3f}")
+
+    if p_value < 0.05:
+        print("  ✓ Strategy significantly outperforms shuffled signals (p<0.05).")
+    elif p_value < 0.10:
+        print("  ~ Marginal significance (0.05 < p < 0.10).")
+    else:
+        print("  ⚠ Strategy does NOT significantly outperform shuffled signals.")
+
+    return real_excess, perm_excesses, p_value
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
