@@ -309,7 +309,11 @@ def compute_forward_returns(close_prices, sym_date_pairs) -> pd.DataFrame:
     pairs["buy_target"] = pairs["date"] + pd.Timedelta(days=EARNINGS_LAG_DAYS)
     pairs["sell_target"] = pairs["buy_target"] + pd.DateOffset(months=3)
 
-    cp = close_prices.sort_values(["symbol", "date"])
+    cp = close_prices.sort_values(["symbol", "date"]).copy()
+    # Normalize datetime resolution to avoid merge_asof dtype mismatch (us vs ms)
+    cp["date"] = cp["date"].astype("datetime64[ns]")
+    pairs["buy_target"] = pairs["buy_target"].astype("datetime64[ns]")
+    pairs["sell_target"] = pairs["sell_target"].astype("datetime64[ns]")
 
     # Prepare sorted copies for buy and sell lookups
     # merge_asof requires both sides sorted by the merge key
