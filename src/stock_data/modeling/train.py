@@ -158,11 +158,12 @@ def optimize_portfolio(p_ret, p_vol, hist_vol_for_diag, cov_mat, cov_syms, test_
     return w, test_syms, False
 
 
-def walk_forward(risk_model_df, feature_cols_all, close_prices, cfg=None,
-                 ens_weights=None):
-    """Run the production walk-forward engine.
+def predict_all_quarters(risk_model_df, feature_cols_all, close_prices,
+                         cfg=None, ens_weights=None):
+    """Run walk-forward prediction only (no optimization).
 
-    Returns ``(prod_df, prod_fi, prod_weights_history)``.
+    Returns a list of per-quarter prediction dicts that can be passed to
+    ``optimize_from_predictions()`` with different optimizer settings.
     """
     if cfg is None:
         cfg = PROD_CFG
@@ -179,20 +180,12 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices, cfg=None,
     dp = X_p.index.get_level_values("date")
     unique_dates = sorted(dp.unique())
 
-    prev_w, prev_s = None, None
-    results = []
+    predictions = []
     fi_list = []
-    weights_history = {}
-
-    print("=" * 80)
-    print("WALK-FORWARD ENGINE")
-    print("=" * 80)
 
     for td in unique_dates:
         tr_dates = [d for d in unique_dates if d < td]
 
-        # Embargo: drop the most recent N training quarters to prevent
-        # feature lookback overlapping with prior holding periods (#75)
         embargo_q = cfg.get("embargo_q", 0)
         if embargo_q > 0 and len(tr_dates) > embargo_q:
             tr_dates = tr_dates[:-embargo_q]
@@ -212,32 +205,65 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices, cfg=None,
         if len(Xtr) < cfg["min_train_rows"] or len(Xte) < cfg["min_test_stocks"]:
             continue
 
-        # ── Feature selection ──
         sel_cols = _select_features(Xtr, ytr_r, cfg["feat_ratio_threshold"])
         Xtr_sel, Xte_sel = Xtr[sel_cols], Xte[sel_cols]
 
-        # ── Ensemble predictions ──
         p_ens, p_xgb, p_rdg, p_rf, (xgb_m, ridge_m, rf_m) = fit_ensemble(
             Xtr_sel, Xte_sel, ytr_r, ens_weights,
         )
-        p_ret = shrink_to_mean(winsorize(p_ens, cfg["winsor_pct"]), cfg["shrinkage_alpha"])
 
         fi_df = multi_source_fi(xgb_m, ridge_m, rf_m, feature_cols_all, sel_cols)
         fi_list.append({"date": td, "fi": fi_df["combined"], "fi_detail": fi_df})
 
-        # ── Vol model ──
         p_vol, vol_rc_train, hist_vol_for_diag = fit_vol_model(Xtr_sel, Xte_sel, ytr_v)
 
-        # ── Covariance & optimization ──
         test_syms = Xte.index.get_level_values("symbol").tolist()
+        act_ret = risk_model_df.loc[Xte.index, "next_q_return"].values
+        act_vol = risk_model_df.loc[Xte.index, "realized_vol"].values
+
+        predictions.append({
+            "test_date": td, "n_train_q": len(tr_dates),
+            "test_index": Xte.index,
+            "test_syms": test_syms,
+            "p_ens": p_ens, "p_xgb": p_xgb, "p_rdg": p_rdg, "p_rf": p_rf,
+            "p_vol": p_vol, "vol_rc_train": vol_rc_train,
+            "hist_vol_for_diag": hist_vol_for_diag,
+            "act_ret": act_ret, "act_vol": act_vol,
+        })
+
+    return predictions, fi_list
+
+
+def optimize_from_predictions(predictions, close_prices, cfg=None):
+    """Run MV optimization on cached predictions.
+
+    Accepts the output of ``predict_all_quarters()`` and returns the same
+    ``(prod_df, weights_history)`` as the optimization half of ``walk_forward``.
+    This allows re-running optimizer sweeps without re-training.
+    """
+    if cfg is None:
+        cfg = PROD_CFG
+
+    prev_w, prev_s = None, None
+    results = []
+    weights_history = {}
+
+    for pred in predictions:
+        td = pred["test_date"]
+        p_ens = pred["p_ens"]
+        p_ret = shrink_to_mean(winsorize(p_ens, cfg["winsor_pct"]), cfg["shrinkage_alpha"])
+        p_vol = pred["p_vol"]
+        hist_vol_for_diag = pred["hist_vol_for_diag"]
+        test_syms = pred["test_syms"]
+        act_ret = pred["act_ret"]
+        act_vol = pred["act_vol"]
+
         buy_dt = td + pd.Timedelta(days=EARNINGS_LAG_DAYS)
         cov_mat, cov_syms = build_covariance(test_syms, buy_dt, close_prices, cfg)
         w, opt_syms, used_lw = optimize_portfolio(
             p_ret, p_vol, hist_vol_for_diag, cov_mat, cov_syms, test_syms, cfg,
         )
 
-        act_ret = risk_model_df.loc[Xte.index, "next_q_return"].values
-        act_vol = risk_model_df.loc[Xte.index, "realized_vol"].values
         if used_lw:
             ti = {s: i for i, s in enumerate(test_syms)}
             kt = [ti[s] for s in opt_syms]
@@ -249,23 +275,21 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices, cfg=None,
         sell_dt = td + pd.DateOffset(months=3) + pd.Timedelta(days=EARNINGS_LAG_DAYS)
         spx_ret = compute_spx_return(buy_dt, sell_dt, close_prices)
 
-        # ── Turnover & costs ──
         to = (portfolio_turnover(prev_w, prev_s, w, opt_syms)
               if prev_w is not None else 1.0)
         txc = to * cfg["cost_bps"] / 10000
         net_ret = port_ret - txc
 
-        # ── Model quality ──
         vrc = safe_spearmanr(p_vol, act_vol)
         rrc = safe_spearmanr(p_ret, act_ret)
-        rrc_x = safe_spearmanr(p_xgb, act_ret)
-        rrc_r = safe_spearmanr(p_rdg, act_ret)
-        rrc_f = safe_spearmanr(p_rf, act_ret)
+        rrc_x = safe_spearmanr(pred["p_xgb"], act_ret)
+        rrc_r = safe_spearmanr(pred["p_rdg"], act_ret)
+        rrc_f = safe_spearmanr(pred["p_rf"], act_ret)
         n_held = int((w > 0.001).sum())
 
         results.append({
-            "test_date": td, "n_train_q": len(tr_dates),
-            "n_stocks": len(Xte), "n_eligible": len(opt_syms),
+            "test_date": td, "n_train_q": pred["n_train_q"],
+            "n_stocks": len(test_syms), "n_eligible": len(opt_syms),
             "n_held": n_held, "max_wt": w.max(),
             "mkt_ret": mkt_ret, "spx_ret": spx_ret, "gross_ret": port_ret,
             "net_ret": net_ret, "turnover": to, "tx_cost": txc,
@@ -276,12 +300,40 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices, cfg=None,
         weights_history[td] = {"weights": w, "symbols": opt_syms}
         prev_w, prev_s = w, opt_syms
 
-        ex = net_ret - mkt_ret
-        print(f"  {td.date()} | {len(tr_dates)}Q | {n_held:3d}h | "
-              f"G={port_ret:+.2%} N={net_ret:+.2%} M={mkt_ret:+.2%} Ex={ex:+.2%} | "
-              f"TO={to:.0%} | {'LW' if used_lw else 'DG'} | rc={rrc:.2f}")
+    return pd.DataFrame(results), weights_history
 
-    prod_df = pd.DataFrame(results)
+
+def walk_forward(risk_model_df, feature_cols_all, close_prices, cfg=None,
+                 ens_weights=None):
+    """Run the production walk-forward engine.
+
+    Returns ``(prod_df, prod_fi, prod_weights_history)``.
+    """
+    if cfg is None:
+        cfg = PROD_CFG
+    if ens_weights is None:
+        ens_weights = ENS_W
+
+    predictions, fi_list = predict_all_quarters(
+        risk_model_df, feature_cols_all, close_prices, cfg, ens_weights,
+    )
+    prod_df, weights_history = optimize_from_predictions(
+        predictions, close_prices, cfg,
+    )
+
+    # Print summary for backward compatibility
+    print("=" * 80)
+    print("WALK-FORWARD ENGINE")
+    print("=" * 80)
+    for _, row in prod_df.iterrows():
+        ex = row["net_ret"] - row["mkt_ret"]
+        lw = "LW" if row["used_lw"] else "DG"
+        print(f"  {row['test_date'].date()} | {row['n_train_q']}Q | "
+              f"{row['n_held']:3d}h | "
+              f"G={row['gross_ret']:+.2%} N={row['net_ret']:+.2%} "
+              f"M={row['mkt_ret']:+.2%} Ex={ex:+.2%} | "
+              f"TO={row['turnover']:.0%} | {lw} | rc={row['ret_rc']:.2f}")
+
     return prod_df, fi_list, weights_history
 
 
