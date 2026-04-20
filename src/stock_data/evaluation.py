@@ -506,8 +506,14 @@ def print_simulation_summary(sim_df, mkt_sim, initial_capital):
 def run_iteration_analysis(
     prod_df, prod_fi, prod_weights_history,
     risk_model_df, feature_cols_all, close_prices,
+    cfg=None, ens_weights=None,
 ):
     """Stable-feature model + factor-neutral attribution + vol model comparison."""
+    if cfg is None:
+        cfg = PROD_CFG
+    if ens_weights is None:
+        ens_weights = ENS_W
+
     X_p = risk_model_df[feature_cols_all].copy()
     y_ret_p = risk_model_df["next_q_return"].copy()
     y_vol_p = risk_model_df["realized_vol"].copy()
@@ -535,7 +541,7 @@ def run_iteration_analysis(
         if len(stable_feat) >= 5:
             print(f"  Re-running with {len(stable_feat)} stable features...")
             unique_dates = sorted(dp.unique())
-            max_q = PROD_CFG.get("max_train_q")
+            max_q = cfg.get("max_train_q")
             stable_results = []
             for _, row in prod_df.iterrows():
                 td = row["test_date"]
@@ -548,7 +554,7 @@ def run_iteration_analysis(
                     continue
                 Xtr_raw = X_p.loc[tr_m, stable_feat]
                 Xte_raw = X_p.loc[te_m, stable_feat]
-                p_ens, _, _, _, _ = fit_ensemble(Xtr_raw, Xte_raw, y_ret_p[tr_m])
+                p_ens, _, _, _, _ = fit_ensemble(Xtr_raw, Xte_raw, y_ret_p[tr_m], ens_weights)
                 rrc, _ = spearmanr(p_ens, y_ret_p[te_m])
                 stable_results.append({
                     "quarter": td, "ret_rc_stable": rrc, "ret_rc_full": row["ret_rc"],

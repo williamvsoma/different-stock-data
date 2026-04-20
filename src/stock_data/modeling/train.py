@@ -285,12 +285,15 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices, cfg=None,
     return prod_df, fi_list, weights_history
 
 
-def factor_benchmarks(risk_model_df, feature_cols_all, prod_df):
+def factor_benchmarks(risk_model_df, feature_cols_all, prod_df, cfg=None):
     """Compare production MV against simple single-factor strategies.
 
     Factor portfolios now track turnover and apply transaction costs
     for fair comparison with the MV strategy.
     """
+    if cfg is None:
+        cfg = PROD_CFG
+
     factor_defs = {
         "Low Vol":       {"col": "hist_vol_6m",   "ascending": True},
         "Momentum (3m)": {"col": "momentum_3m",   "ascending": False},
@@ -301,7 +304,6 @@ def factor_benchmarks(risk_model_df, feature_cols_all, prod_df):
     X_p = risk_model_df[feature_cols_all].copy()
     dp = X_p.index.get_level_values("date")
     unique_dates = sorted(dp.unique())
-    cfg = PROD_CFG
 
     factor_results = {name: [] for name in factor_defs}
     prev_held = {name: set() for name in factor_defs}
