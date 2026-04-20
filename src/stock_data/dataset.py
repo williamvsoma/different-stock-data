@@ -209,6 +209,35 @@ def download_prices(symbols, start, end) -> tuple[pd.DataFrame, list[str]]:
     return close, failed
 
 
+def build_returns_panel(close_prices):
+    """Pre-compute a (date × symbol) daily returns panel.
+
+    Returns a dict with keys:
+    - 'close_panel': DataFrame (date × symbol) of close prices
+    - 'returns_panel': DataFrame (date × symbol) of daily returns
+    - 'grouped': dict {symbol: sorted Series of close prices indexed by date}
+
+    This avoids redundant groupby/pivot in momentum_features and risk_features.
+    """
+    close_panel = close_prices.pivot_table(
+        index="date", columns="symbol", values="close",
+    )
+    close_panel = close_panel.sort_index()
+    returns_panel = close_panel.pct_change()
+
+    # Pre-grouped for per-symbol lookups (still needed by some code paths)
+    grouped = {
+        sym: close_panel[sym].dropna()
+        for sym in close_panel.columns
+    }
+
+    return {
+        "close_panel": close_panel,
+        "returns_panel": returns_panel,
+        "grouped": grouped,
+    }
+
+
 # ── Macro data ─────────────────────────────────────────────────────────────────
 
 

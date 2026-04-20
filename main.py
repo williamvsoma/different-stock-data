@@ -40,6 +40,7 @@ from stock_data.dataset import (
     reshape_statements,
 )
 from stock_data.features import build_features
+from stock_data.dataset import build_returns_panel
 from stock_data.modeling.train import factor_benchmarks, walk_forward
 from stock_data.evaluation import (
     summarize_walk_forward,
@@ -207,9 +208,11 @@ def stage_features():
     returns_full = returns_df.merge(vol_df, on=["symbol", "date"], how="inner")
 
     # ── 5. Build features ──
+    price_panel = build_returns_panel(close_prices)
     risk_model_df, feature_cols = build_features(
         features_raw, bs_raw, cf_raw, annual_raw,
         close_prices, macro_df, returns_df, returns_full,
+        price_panel=price_panel,
     )
 
     # ── 5b. Point-in-time universe filter (removes survivorship bias) ──
