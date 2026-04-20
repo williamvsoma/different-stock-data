@@ -224,3 +224,65 @@ Track all experiments run against the strategy. Record hypothesis, method, resul
 - **EXP-01**: Ensemble Weight Optimization — ❌ Rejected (2025-07-22)
 - **EXP-03**: Rank Feature Ablation — ❌ Rejected (2025-07-22)
 - **EXP-04**: Volatility Model Benchmark — ❌ Rejected (2025-07-22)
+
+## Issue #26 — Shrinkage Alpha & Winsorization Sweep
+
+**Date**: 2026-04-20
+**Branch**: `experiment/26-sweep-shrinkage-winsor`
+
+### Hypothesis
+Baseline uses `shrinkage_alpha=0.5` and `winsor_pct=0.05` with order: winsorize → shrink.
+This compresses ensemble predictions heavily. If models have real signal, less shrinkage
+should improve performance.
+
+### Method
+Walk-forward backtest (N=2 quarters) with:
+- Shrinkage α ∈ {0.0, 0.25, 0.5, 0.75, 1.0}
+- Winsor pct ∈ {0.01, 0.02, 0.05, 0.10, 0.20}
+- Reverse order test: shrink→winsorize vs winsorize→shrink
+
+All other parameters held at baseline values.
+
+### Results
+
+**Shrinkage Alpha Sweep**:
+| α    | Avg Excess Net | Win Rate | Sharpe | IR     | Turnover | Holdings |
+|------|---------------|----------|--------|--------|----------|----------|
+| 0.00 | -2.90%        | 0%       | 6.97   | -31.35 | 64%      | 68       |
+| 0.25 | +2.65%        | 100%     | 11.70  | 26.67  | 81%      | 56       |
+| 0.50 | +6.49%        | 100%     | 96.07  | 10.09  | 86%      | 54       |
+| 0.75 | +6.98%        | 100%     | 17.89  | 4.32   | 87%      | 54       |
+| 1.00 | +9.30%        | 100%     | 40.03  | 7.64   | 84%      | 52       |
+
+**Winsorization Sweep**:
+| pct  | Avg Excess Net | Win Rate | Sharpe  | IR    | Turnover | Holdings |
+|------|---------------|----------|---------|-------|----------|----------|
+| 0.01 | +7.24%        | 100%     | 8.36    | 7.21  | 85%      | 54       |
+| 0.02 | +7.31%        | 100%     | 8.64    | 7.67  | 86%      | 54       |
+| 0.05 | +6.49%        | 100%     | 96.07   | 10.09 | 86%      | 54       |
+| 0.10 | +2.06%        | 100%     | 233.88  | 2.47  | 88%      | 57       |
+| 0.20 | -2.59%        | 0%       | 12.56   | -2.15 | 87%      | 60       |
+
+**Reverse Order**: Identical to baseline (operations commute at default params).
+
+### Interpretation
+
+1. **Higher α (less shrinkage) → better excess returns**: Monotonically increasing from
+   α=0.0 (-2.9%) to α=1.0 (+9.3%). The models have real predictive content that shrinkage
+   is suppressing.
+
+2. **Less winsorization → better**: winsor_pct=0.02 is best. Aggressive clipping (0.10+)
+   destroys signal. Tail predictions carry disproportionate alpha.
+
+3. **Order irrelevant**: At 0.5/0.05, winsorize→shrink ≡ shrink→winsorize.
+
+### Statistical Warning
+⚠ **N=2 quarters only**. These results are INSUFFICIENT for any deployment conclusion.
+The directional pattern (less compression → more excess) is informative but not significant.
+Need 15+ quarters minimum for 80% power at conventional significance levels.
+
+### Recommendation
+- **Immediate**: No parameter change justified with N=2.
+- **If validated with more data**: Consider α=0.75 (conservative step toward less shrinkage)
+  and winsor_pct=0.02 (mild widening). Never go to α=1.0 without guardrails — zero shrinkage
+  in production is reckless with XGBoost predictions.
