@@ -64,6 +64,7 @@ def run_walk_forward(
     tree_cols=None,
     ridge_feature_cols=None,
     shrinkage_alpha=None,
+    permute_seed=None,
     label="baseline",
     return_detail=False,
 ):
@@ -150,6 +151,11 @@ def run_walk_forward(
         p_ens = ew["xgb"] * p_xgb + ew["ridge"] * p_rdg + ew["rf"] * p_rf
         s_a = shrinkage_alpha if shrinkage_alpha is not None else cfg["shrinkage_alpha"]
         p_ret = shrink_to_mean(winsorize(p_ens, cfg["winsor_pct"]), s_a)
+
+        # Permutation test: shuffle cross-sectional ranking (null = random stock→prediction mapping)
+        if permute_seed is not None:
+            perm_rng = np.random.RandomState(permute_seed + int(td.timestamp()) % 10000)
+            p_ret = perm_rng.permutation(p_ret)
 
         # ── Vol model ──
         vol_m = xgb.XGBRegressor(**vol_params)
@@ -574,7 +580,7 @@ def robustness_31_param_sensitivity_grid():
 
 
 def robustness_31_permutation_test(n_perms=20):
-    """Shuffle predicted returns before optimisation. Compare real vs random."""
+    """Proper permutation test: shuffle stock↔prediction mapping each quarter."""
     print(f"\n>>> ROBUSTNESS #31.7: Permutation Test ({n_perms} shuffles)")
 
     # Real baseline
@@ -584,24 +590,12 @@ def robustness_31_permutation_test(n_perms=20):
     )
     real_excess = (real["net_ret"] - real["mkt_ret"]).mean()
 
-    # Run permuted versions by setting random seed and using noise predictions
+    # Permuted: same predictions, random cross-sectional assignment
     perm_excesses = []
-    rng = np.random.RandomState(42)
     for i in range(n_perms):
-        # We simulate permuted signal by setting shrinkage to 0 (full mean)
-        # and adding random noise. But the cleanest permutation test is:
-        # run with random predictions. We achieve this by fully shrinking (α=0)
-        # which makes all predictions → cross-sectional mean → near-equal-weight.
-        # Then add a tiny random epsilon to break ties.
-        # This isn't a true permutation (would need to modify predictions inside
-        # the loop), so instead we use the engine but perturb the ENS_W randomly.
-        w = rng.dirichlet([1, 1, 1])
-        ew = {"xgb": w[0], "ridge": w[1], "rf": w[2]}
-        # Also fully shrink to mean → noise
         perm = run_walk_forward(
             risk_model_df, feature_cols_all, close_prices, PROD_CFG,
-            ens_weights=ew,
-            shrinkage_alpha=0.0,
+            permute_seed=i * 7 + 1,
             label=f"perm_{i}",
         )
         perm_excess = (perm["net_ret"] - perm["mkt_ret"]).mean()
@@ -616,11 +610,11 @@ def robustness_31_permutation_test(n_perms=20):
     print(f"  P-value (perm >= real): {p_value:.3f}")
 
     if p_value < 0.05:
-        print("  ✓ Strategy significantly outperforms random signals (p<0.05).")
+        print("  ✓ Strategy significantly outperforms shuffled signals (p<0.05).")
     elif p_value < 0.10:
         print("  ~ Marginal significance (0.05 < p < 0.10).")
     else:
-        print("  ⚠ Strategy does NOT significantly outperform random signals.")
+        print("  ⚠ Strategy does NOT significantly outperform shuffled signals.")
 
     return real_excess, perm_excesses, p_value
 
