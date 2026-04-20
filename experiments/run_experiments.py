@@ -579,7 +579,7 @@ def robustness_31_param_sensitivity_grid():
     return rdf
 
 
-def robustness_31_permutation_test(n_perms=20):
+def robustness_31_permutation_test(n_perms=100):
     """Proper permutation test: shuffle stock↔prediction mapping each quarter."""
     print(f"\n>>> ROBUSTNESS #31.7: Permutation Test ({n_perms} shuffles)")
 
