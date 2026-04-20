@@ -18,6 +18,7 @@ from stock_data.config import (
     XGB_PARAMS,
 )
 from stock_data.modeling.predict import (
+    compute_spx_return,
     ledoit_wolf_cov,
     multi_source_fi,
     mv_optimize,
@@ -180,6 +181,10 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
 
         mkt_ret = act_ret.mean()
 
+        # S&P 500 cap-weighted benchmark
+        sell_dt = td + pd.DateOffset(months=3) + pd.Timedelta(days=EARNINGS_LAG_DAYS)
+        spx_ret = compute_spx_return(buy_dt, sell_dt, close_prices)
+
         # ── Turnover & costs ──
         to = (portfolio_turnover(prev_w, prev_s, w, opt_syms)
               if prev_w is not None else 1.0)
@@ -198,7 +203,7 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
             "test_date": td, "n_train_q": len(tr_dates),
             "n_stocks": len(Xte), "n_eligible": len(opt_syms),
             "n_held": n_held, "max_wt": w.max(),
-            "mkt_ret": mkt_ret, "gross_ret": port_ret,
+            "mkt_ret": mkt_ret, "spx_ret": spx_ret, "gross_ret": port_ret,
             "net_ret": net_ret, "turnover": to, "tx_cost": txc,
             "vol_rc": vrc, "ret_rc": rrc,
             "ret_rc_xgb": rrc_x, "ret_rc_ridge": rrc_r, "ret_rc_rf": rrc_f,

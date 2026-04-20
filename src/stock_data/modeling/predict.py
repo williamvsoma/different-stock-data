@@ -1,6 +1,7 @@
 """Portfolio optimization and prediction helpers."""
 
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize
 from scipy.stats import spearmanr
 from sklearn.covariance import LedoitWolf
@@ -162,3 +163,18 @@ def bootstrap_ci(vals, n_boot=10_000, seed=42):
     lo, hi = np.percentile(means, [2.5, 97.5])
     p_neg = np.mean(means <= 0)
     return lo, hi, p_neg, means
+
+
+def compute_spx_return(buy_date, sell_date, close_prices):
+    """Compute S&P 500 (^GSPC) return between buy_date and sell_date.
+
+    Returns the total return or np.nan if data is insufficient.
+    """
+    spx = close_prices[
+        (close_prices["symbol"] == "^GSPC")
+        & (close_prices["date"] >= buy_date)
+        & (close_prices["date"] <= sell_date)
+    ].sort_values("date")
+    if len(spx) < 5:
+        return np.nan
+    return spx["close"].iloc[-1] / spx["close"].iloc[0] - 1

@@ -37,16 +37,23 @@ def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
     metrics = [
         ("Avg return (gross)",      f"{prod_df['gross_ret'].mean():+.2%}"),
         ("Avg return (net)",        f"{prod_df['net_ret'].mean():+.2%}"),
-        ("Avg market return",       f"{prod_df['mkt_ret'].mean():+.2%}"),
-        ("Avg excess (gross)",      f"{ex_g.mean():+.2%}"),
-        ("Avg excess (net)",        f"{ex_n.mean():+.2%}"),
-        ("Win rate (net > mkt)",    f"{(ex_n > 0).sum()}/{len(prod_df)} ({(ex_n > 0).mean():.0%})"),
+        ("Avg market return (EW)",  f"{prod_df['mkt_ret'].mean():+.2%}"),
+        ("Avg excess vs EW (gross)",f"{ex_g.mean():+.2%}"),
+        ("Avg excess vs EW (net)",  f"{ex_n.mean():+.2%}"),
+        ("Win rate (net > EW)",     f"{(ex_n > 0).sum()}/{len(prod_df)} ({(ex_n > 0).mean():.0%})"),
         ("Avg holdings",            f"{prod_df['n_held'].mean():.0f}"),
         ("Avg max weight",          f"{prod_df['max_wt'].mean():.2%}"),
         ("Avg turnover (one-way)",  f"{prod_df['turnover'].mean():.0%}"),
         ("Avg tx cost",             f"{prod_df['tx_cost'].mean():.2%}"),
         ("Ledoit-Wolf used",        f"{prod_df['used_lw'].sum()}/{len(prod_df)}"),
     ]
+    if "spx_ret" in prod_df.columns and prod_df["spx_ret"].notna().any():
+        spx_valid = prod_df[prod_df["spx_ret"].notna()]
+        ex_spx = spx_valid["net_ret"] - spx_valid["spx_ret"]
+        metrics.insert(3, ("Avg S&P 500 return", f"{spx_valid['spx_ret'].mean():+.2%}"))
+        metrics.insert(6, ("Avg excess vs SPX (net)", f"{ex_spx.mean():+.2%}"))
+        metrics.insert(7, ("Win rate (net > SPX)",
+                           f"{(ex_spx > 0).sum()}/{len(spx_valid)} ({(ex_spx > 0).mean():.0%})"))
     for label, val in metrics:
         print(f"  {label:30s} {val:>10s}")
 
@@ -94,6 +101,11 @@ def evaluate_factors(prod_df, factor_results, n_boot=N_BOOT):
     """
     ex_n = prod_df["net_ret"] - prod_df["mkt_ret"]
 
+    # SPX (cap-weighted) benchmark excess, if available
+    has_spx = "spx_ret" in prod_df.columns and prod_df["spx_ret"].notna().any()
+    if has_spx:
+        ex_spx = prod_df["net_ret"] - prod_df["spx_ret"]
+
     print("=" * 80)
     print("FACTOR BENCHMARK COMPARISON")
     print("=" * 80)
@@ -104,6 +116,14 @@ def evaluate_factors(prod_df, factor_results, n_boot=N_BOOT):
           f"{ex_n.mean():+7.2%} {(ex_n > 0).mean():5.0%} {len(prod_df):3d}")
     print(f"  {'Market (equal wt)':25s} {prod_df['mkt_ret'].mean():+8.2%} "
           f"{'---':>8s} {'---':>6s} {len(prod_df):3d}")
+
+    if has_spx:
+        spx_valid = prod_df[prod_df["spx_ret"].notna()]
+        print(f"  {'S&P 500 (cap wt)':25s} {spx_valid['spx_ret'].mean():+8.2%} "
+              f"{'---':>8s} {'---':>6s} {len(spx_valid):3d}")
+        print(f"  {'MV excess vs SPX':25s} {'---':>9s} "
+              f"{ex_spx.dropna().mean():+7.2%} {(ex_spx.dropna() > 0).mean():5.0%} "
+              f"{ex_spx.notna().sum():3d}")
 
     factor_excess_for_boot = {}
     for fname, results in factor_results.items():
@@ -133,6 +153,16 @@ def evaluate_factors(prod_df, factor_results, n_boot=N_BOOT):
     print(f"    P(excess <= 0):   {boot_p:.3f}")
     print(f"    N quarters:       {len(ex_net_vals)}")
 
+    if has_spx:
+        spx_vals = ex_spx.dropna().values
+        if len(spx_vals) >= 3:
+            slo, shi, sp, _ = bootstrap_ci(spx_vals, n_boot)
+            print(f"\n  Production MV excess vs S&P 500:")
+            print(f"    Point estimate:   {spx_vals.mean():+.2%}")
+            print(f"    95% CI:           [{slo:+.2%}, {shi:+.2%}]")
+            print(f"    P(excess <= 0):   {sp:.3f}")
+            print(f"    N quarters:       {len(spx_vals)}")
+
     for fname, fex in factor_excess_for_boot.items():
         if len(fex) < 3:
             continue
@@ -157,17 +187,30 @@ def evaluate_factors(prod_df, factor_results, n_boot=N_BOOT):
     print(f"\n{'='*80}")
     print("FINAL PRODUCTION ASSESSMENT")
     print(f"{'='*80}")
+    spx_section = ""
+    if has_spx:
+        spx_ex = ex_spx.dropna()
+        ann_excess_spx = (1 + spx_ex.mean())**4 - 1
+        spx_ir = (spx_ex.mean() / spx_ex.std() * np.sqrt(4)) if spx_ex.std() > 0 else 0
+        spx_section = f"""
+  --- vs S&P 500 (cap-weighted) ---
+  Ann excess vs SPX:     {ann_excess_spx:+.1%}
+  IR vs SPX:             {spx_ir:.2f}
+  Win rate vs SPX:       {(spx_ex > 0).sum()}/{len(spx_ex)} ({(spx_ex > 0).mean():.0%})"""
+
     print(f"""
-  Annualized excess:     {ann_excess_net:+.1%}
+  --- vs Equal-Weight Universe ---
+  Ann excess (EW):       {ann_excess_net:+.1%}
   Sharpe (ann):          {net_sharpe:.2f}
-  Information ratio:     {net_ir:.2f}
+  IR (vs EW):            {net_ir:.2f}
   Calmar ratio:          {calmar:.2f}
-  Win rate vs market:    {(ex_n > 0).sum()}/{len(prod_df)} ({(ex_n > 0).mean():.0%})
+  Win rate vs EW:        {(ex_n > 0).sum()}/{len(prod_df)} ({(ex_n > 0).mean():.0%})
   Max drawdown:          {max_dd:+.2%}
   t-statistic:           {t_stat:.2f}
   p-value:               {p_val:.3f}
   Bootstrap 95% CI:      [{ci_lo:+.2%}, {ci_hi:+.2%}]
   Bootstrap P(<=0):      {boot_p:.3f}
+{spx_section}
 """)
 
     return ci_lo, ci_hi, boot_means, ex_n
