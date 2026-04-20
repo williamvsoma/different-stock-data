@@ -1,6 +1,7 @@
 """Portfolio optimization and prediction helpers."""
 
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize
 from scipy.stats import spearmanr
 from sklearn.covariance import LedoitWolf
@@ -122,8 +123,6 @@ def compute_spx_return(buy_date, sell_date, close_prices):
 
     Returns the total return or np.nan if data is insufficient.
     """
-    import pandas as pd
-
     spx = close_prices[
         (close_prices["symbol"] == "^GSPC")
         & (close_prices["date"] >= buy_date)
