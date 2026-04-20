@@ -26,6 +26,7 @@ from stock_data.modeling.predict import (
     mv_optimize_diag,
     portfolio_turnover,
     safe_spearmanr,
+    select_vol_estimate,
     shrink_to_mean,
     winsorize,
 )
@@ -151,12 +152,7 @@ def walk_forward(risk_model_df, feature_cols_all, close_prices):
         # Quality gate: if ML vol model is weak on training set, fall back to hist_vol_3m
         p_vol_naive = Xte_sel["hist_vol_3m"].values if "hist_vol_3m" in Xte_sel.columns else None
         vol_rc_train = safe_spearmanr(vol_m.predict(Xtr_sel), ytr_v) if len(ytr_v) >= 10 else np.nan
-        if (p_vol_naive is not None
-                and np.isfinite(vol_rc_train)
-                and vol_rc_train < VOL_RC_GATE):
-            p_vol = np.maximum(np.nan_to_num(p_vol_naive, nan=p_vol_ml.mean()), VOL_FLOOR)
-        else:
-            p_vol = p_vol_ml
+        p_vol = select_vol_estimate(p_vol_ml, p_vol_naive, vol_rc_train, VOL_RC_GATE, VOL_FLOOR)
 
         # For diagonal fallback, use historical vol (not predicted forward vol)
         hist_vol_for_diag = Xte_sel["hist_vol_3m"].values if "hist_vol_3m" in Xte_sel.columns else p_vol
