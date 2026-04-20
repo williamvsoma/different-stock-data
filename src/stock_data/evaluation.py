@@ -81,7 +81,7 @@ def summarize_walk_forward(prod_df, prod_fi, feature_cols_all):
             if len(sub) == 0:
                 continue
             sub_ex = sub["net_ret"] - sub["mkt_ret"]
-            ann_sharpe = sub_ex.mean() / (sub_ex.std() + 1e-10) * 2  # quarterly → annual
+            ann_sharpe = sub_ex.mean() / (sub_ex.std() + 1e-10) * np.sqrt(4)  # quarterly → annual
             print(f"  {label} (N={len(sub)}):")
             print(f"    Avg excess (net):   {sub_ex.mean():+.2%}")
             print(f"    Annualized Sharpe:  {ann_sharpe:.2f}")
